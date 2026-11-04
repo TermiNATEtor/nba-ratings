@@ -21,6 +21,11 @@ import pandas as pd
 # ---------------------------------------------------------------- settings
 SEASON = "2026-27"
 
+# Where the stats come from: "espn" (works from GitHub's servers) or
+# "nba" (NBA.com, which blocks cloud servers but works from your own computer).
+DATA_SOURCE = "espn"
+ESPN_SEASON = 2027   # ESPN names a season by the year it ENDS (2026-27 -> 2027)
+
 # "Qualified players only" view (the on/off switch on the page).
 # A player must meet BOTH of these to appear in that view:
 MIN_GP_PCT = 0.50   # at least 50% of their team's games played
@@ -119,7 +124,142 @@ def compute_ratings(players, teams, qualified_only=False):
 
 
 # ---------------------------------------------------------------- fetching
+# ESPN names for each stat we need (first match wins; case-insensitive).
+ESPN_STATS = {
+    "GP": ["gamesPlayed"],
+    "MIN": ["avgMinutes", "minutesPerGame"],
+    "PTS": ["avgPoints", "pointsPerGame"],
+    "REB": ["avgRebounds", "reboundsPerGame"],
+    "AST": ["avgAssists", "assistsPerGame"],
+    "STL": ["avgSteals", "stealsPerGame"],
+    "BLK": ["avgBlocks", "blocksPerGame"],
+    "TOV": ["avgTurnovers", "turnoversPerGame"],
+    "FGA": ["avgFieldGoalsAttempted"],
+    "FG_PCT": ["fieldGoalPct"],
+    "FTA": ["avgFreeThrowsAttempted"],
+    "FT_PCT": ["freeThrowPct"],
+    "FG3A": ["avgThreePointFieldGoalsAttempted"],
+    "FG3_PCT": ["threePointFieldGoalPct", "threePointPct"],
+}
+ESPN_URL = ("https://site.web.api.espn.com/apis/common/v3/sports/"
+            "basketball/nba/statistics/byathlete")
+
+
+def _page_names(page):
+    """ESPN lists each stat group's names once at the top of the page."""
+    top = {}
+    for i, c in enumerate(page.get("categories", [])):
+        top[c.get("name")] = c.get("names", [])
+        top[i] = c.get("names", [])
+    return top
+
+
+def _cat_names(cat, top, i):
+    """Names for one player's stat group (from the player, else from the page top)."""
+    return cat.get("names") or top.get(cat.get("name")) or top.get(i) or []
+
+
+def parse_espn(pages):
+    """Turn ESPN's pages of JSON into the same tables the scoring code uses."""
+    # Collect every stat name ESPN gave us, so a mismatch is easy to diagnose.
+    available = set()
+    for page in pages:
+        top = _page_names(page)
+        for item in page.get("athletes", []):
+            for i, cat in enumerate(item.get("categories", [])):
+                available.update(n.lower() for n in _cat_names(cat, top, i))
+
+    if not available:  # structure isn't what we expected: show what we got
+        first = (pages[0].get("athletes") or [{}])[0]
+        cats = first.get("categories") or [{}]
+        raise ValueError("Could not find stat names in ESPN's data. "
+                         f"Page keys: {sorted(pages[0].keys())}. "
+                         f"Player keys: {sorted(first.keys())}. "
+                         f"First stat group keys: {sorted(cats[0].keys())}. "
+                         f"Page 'categories' sample: {str(pages[0].get('categories'))[:300]}")
+
+    keys = {}
+    for col, candidates in ESPN_STATS.items():
+        found = next((c.lower() for c in candidates if c.lower() in available), None)
+        if found is None:
+            raise ValueError(f"ESPN data has no stat for '{col}'. "
+                             f"Stat names it does have: {sorted(available)}")
+        keys[col] = found
+
+    rows = []
+    for page in pages:
+        top = _page_names(page)
+        for item in page.get("athletes", []):
+            a = item.get("athlete", {})
+            flat = {}
+            for i, cat in enumerate(item.get("categories", [])):
+                for name, val in zip(_cat_names(cat, top, i), cat.get("values", [])):
+                    flat[name.lower()] = val
+            row = {
+                "PLAYER_ID": a.get("id"),
+                "PLAYER_NAME": a.get("displayName"),
+                "TEAM_ABBREVIATION": a.get("teamShortName") or a.get("teamName") or "—",
+            }
+            for col, key in keys.items():
+                row[col] = pd.to_numeric(flat.get(key), errors="coerce")
+            rows.append(row)
+
+    df = pd.DataFrame(rows).dropna(subset=["PLAYER_NAME", "GP"])
+    df = df[df["GP"] > 0]
+    df = df.sort_values("GP", ascending=False).drop_duplicates("PLAYER_ID")
+
+    # ESPN gives percentages like 48.7; the scoring code wants 0.487.
+    for pct in ("FG_PCT", "FT_PCT", "FG3_PCT"):
+        if df[pct].max() > 1.5:
+            df[pct] = df[pct] / 100.0
+
+    # Team games played = the most games any player on that team has played.
+    df["TEAM_ID"] = df["TEAM_ABBREVIATION"]
+    teams = df.groupby("TEAM_ID", as_index=False)["GP"].max()
+    return df.reset_index(drop=True), teams
+
+
+def fetch_espn():
+    import time
+    import requests
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; nba-ratings)"}
+    pages, page = [], 1
+    while page <= 40:
+        params = {"region": "us", "lang": "en", "contentorigin": "espn",
+                  "isqualified": "false", "page": page, "limit": 50,
+                  "season": ESPN_SEASON, "seasontype": 2,
+                  "sort": "offensive.avgPoints:desc"}
+        for attempt in range(3):
+            try:
+                r = requests.get(ESPN_URL, params=params, headers=headers, timeout=30)
+                r.raise_for_status()
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(3)
+        data = r.json()
+        if not data.get("athletes"):
+            break
+        pages.append(data)
+        total_pages = (data.get("pagination") or {}).get("pages")
+        if total_pages and page >= total_pages:
+            break
+        page += 1
+        time.sleep(0.5)
+    if not pages:
+        raise ValueError("ESPN returned no players")
+    return parse_espn(pages)
+
+
 def fetch():
+    if DATA_SOURCE == "espn":
+        return fetch_espn()
+    return fetch_nba()
+
+
+def fetch_nba():
     from nba_api.stats.endpoints import leaguedashplayerstats, leaguedashteamstats
 
     kw = dict(season=SEASON, season_type_all_star="Regular Season",
@@ -204,7 +344,7 @@ def write_html(rows_all, rows_q, path="index.html"):
 if __name__ == "__main__":
     try:
         players_df, teams_df = fetch()
-    except Exception as e:  # NBA.com often blocks cloud IPs / times out
-        sys.exit(f"Could not reach NBA.com: {e}")
+    except Exception as e:  # NBA.com often blocks cloud IPs; ESPN feed can change
+        sys.exit(f"Could not get the stats: {e}")
     write_html(compute_ratings(players_df, teams_df),
                compute_ratings(players_df, teams_df, qualified_only=True))
