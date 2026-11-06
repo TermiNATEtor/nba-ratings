@@ -49,6 +49,21 @@ CATEGORIES = [
 ]
 
 
+# Emoji + full title shown on the front page for each category.
+CATEGORY_INFO = {
+    "ppg": ("🔥", "Points per game"),
+    "rpg": ("💪", "Rebounds per game"),
+    "apg": ("🎯", "Assists per game"),
+    "spg": ("🖐️", "Steals per game"),
+    "bpg": ("🛡️", "Blocks per game"),
+    "fgp": ("✅", "Field goal %"),
+    "ftp": ("🧊", "Free throw %"),
+    "tpp": ("🏹", "3-point %"),
+    "dur": ("🧱", "Durability (games played %)"),
+    "tov": ("🔒", "Fewest turnovers per game"),
+}
+
+
 # ---------------------------------------------------------------- scoring
 def tier_score(rank):
     """Dense rank -> 1-10 score. Unranked (NaN) -> 1."""
@@ -80,6 +95,11 @@ def compute_ratings(players, teams, qualified_only=False):
     """players / teams are the raw NBA.com per-game DataFrames.
     qualified_only=True drops low-games / low-minutes players BEFORE ranking."""
     df = players.copy()
+    if "PLAYER_ID" not in df:
+        df["PLAYER_ID"] = df.index.astype(str)
+    if "PHOTO" not in df:  # NBA.com headshots (used when DATA_SOURCE = "nba")
+        df["PHOTO"] = df["PLAYER_ID"].map(
+            lambda i: f"https://cdn.nba.com/headshots/nba/latest/1040x760/{i}.png")
 
     # Durability = games played / team games played (capped at 100%)
     team_gp = dict(zip(teams["TEAM_ID"], teams["GP"]))
@@ -110,7 +130,10 @@ def compute_ratings(players, teams, qualified_only=False):
 
     rows = []
     for _, r in df.sort_values("OVERALL", ascending=False).iterrows():
+        photo = r.get("PHOTO")
         rows.append({
+            "id": str(r["PLAYER_ID"]),
+            "photo": photo if isinstance(photo, str) else "",
             "name": r["PLAYER_NAME"],
             "team": r["TEAM_ABBREVIATION"],
             "mpg": f"{r['MIN']:.1f}",
@@ -195,7 +218,13 @@ def parse_espn(pages):
             for i, cat in enumerate(item.get("categories", [])):
                 for name, val in zip(_cat_names(cat, top, i), cat.get("values", [])):
                     flat[name.lower()] = val
+            head = a.get("headshot")
+            photo = head.get("href") if isinstance(head, dict) else None
+            if not photo and a.get("id"):
+                photo = ("https://a.espncdn.com/i/headshots/nba/players/full/"
+                         f"{a['id']}.png")
             row = {
+                "PHOTO": photo,
                 "PLAYER_ID": a.get("id"),
                 "PLAYER_NAME": a.get("displayName"),
                 "TEAM_ABBREVIATION": a.get("teamShortName") or a.get("teamName") or "—",
@@ -270,63 +299,211 @@ def fetch_nba():
 
 
 # ---------------------------------------------------------------- output
-HTML = """<!doctype html>
+HTML = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NBA Player Ratings</title>
 <style>
-:root{--bg:#fff;--fg:#1a1a1a;--muted:#6b7280;--line:#e5e7eb;--head:#f3f4f6}
-@media (prefers-color-scheme:dark){:root{--bg:#121212;--fg:#eee;--muted:#9ca3af;--line:#2a2a2a;--head:#1e1e1e}}
+:root{--bg:#f3f4f8;--card:#fff;--fg:#14161c;--muted:#6b7280;--line:#e5e7eb;--head:#eceef3;--accent:#f97316;--accent2:#c2410c;--shadow:0 2px 10px rgba(20,22,28,.08)}
+@media (prefers-color-scheme:dark){:root{--bg:#0d0f14;--card:#171a22;--fg:#eef0f5;--muted:#9aa3b2;--line:#262a35;--head:#232733;--accent2:#fb923c;--shadow:0 2px 12px rgba(0,0,0,.45)}}
 *{box-sizing:border-box}
-body{margin:0;font:14px system-ui,sans-serif;background:var(--bg);color:var(--fg)}
-header{padding:12px;position:sticky;left:0}
-h1{font-size:18px;margin:0 0 4px}
-.sub{color:var(--muted);font-size:12px;margin-bottom:8px}
-input[type=search]{width:100%;max-width:320px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font-size:16px}
-.wrap{overflow-x:auto}
+body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--fg)}
+.top{background:linear-gradient(135deg,#1a2550,#0d1330 55%,#6b2a0f);color:#fff;padding:18px 14px 14px}
+.top-in{max-width:1100px;margin:0 auto}
+.top h1{margin:0;font-size:23px}
+.top .sub{color:#c7cbe0;font-size:12px;margin:3px 0 12px}
+.ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.ctl input[type=search]{flex:1;min-width:170px;max-width:340px;padding:9px 12px;border-radius:10px;border:0;background:rgba(255,255,255,.15);color:#fff;font-size:16px;outline:none}
+.ctl input::placeholder{color:#c7cbe0}
+.seg{display:flex;gap:4px;background:rgba(255,255,255,.12);padding:3px;border-radius:12px}
+.seg button{border:0;background:none;color:#dfe2f3;padding:7px 12px;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer}
+.seg button.on{background:var(--accent);color:#fff}
+.tg{display:flex;align-items:center;gap:6px;font-size:13px;color:#e6e8f5;cursor:pointer}
+.tg input{accent-color:var(--accent);width:17px;height:17px}
+.main{max-width:1100px;margin:0 auto;padding:12px}
+.hide{display:none}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+.card.first{border-color:var(--accent)}
+.ch{display:flex;align-items:center;gap:8px;padding:12px 14px 4px;font-weight:700;font-size:16px}
+.ch .em{font-size:21px}
+.lead{display:flex;align-items:center;gap:12px;margin:6px 10px;padding:10px;border-radius:12px;background:linear-gradient(135deg,rgba(249,115,22,.20),rgba(249,115,22,.05));cursor:pointer}
+.lead .nm{flex:1;min-width:0}
+.lead .nm b{font-size:17px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lead .nm small{color:var(--muted)}
+.big{font-size:26px;font-weight:800;color:var(--accent2)}
+.big small{font-size:12px;color:var(--muted);font-weight:600;margin-left:2px}
+.row{display:flex;align-items:center;gap:10px;padding:6px 14px;cursor:pointer}
+.row:hover,.lead:hover{background:var(--head)}
+.rk{width:18px;color:var(--muted);font-size:13px;text-align:right}
+.row .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .nm small{color:var(--muted);margin-left:6px}
+.row .val{font-weight:700}
+.row .val small{color:var(--muted);font-weight:600}
+.cf{display:block;width:100%;margin-top:6px;padding:11px;border:0;border-top:1px solid var(--line);background:none;color:var(--accent2);font-weight:700;font-size:14px;cursor:pointer}
+.cf:hover{background:var(--head)}
+.empty{padding:14px;color:var(--muted)}
+.av{width:var(--s);height:var(--s);border-radius:50%;background:var(--head);position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;flex:none;font-weight:700;color:var(--muted);font-size:calc(var(--s)*.34)}
+.av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 12%}
+.wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:14px}
 table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%}
 th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:center;white-space:nowrap}
 th{background:var(--head);position:sticky;top:0;cursor:pointer;user-select:none;z-index:2}
-th:first-child,td:first-child{position:sticky;left:0;text-align:left;background:var(--bg);z-index:1;min-width:150px}
+th:first-child,td:first-child{position:sticky;left:0;text-align:left;background:var(--card);z-index:1;min-width:190px}
 th:first-child{background:var(--head);z-index:3}
+tbody tr{cursor:pointer}
+tbody tr:hover td{background:var(--head)}
+.pc{display:flex;align-items:center;gap:8px}
 td small{display:block;color:var(--muted);font-size:10px}
 td.sc b{display:block;border-radius:6px;padding:2px 0;min-width:30px}
-.ov{font-weight:700}
-.tg{display:block;margin:8px 0 4px}
+td.o{font-weight:700}
+.foot{max-width:1100px;margin:0 auto;padding:6px 14px 28px;color:var(--muted);font-size:12px}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;justify-content:center;z-index:50}
+.ov.show{display:flex}
+.sheet{position:relative;background:var(--card);width:100%;max-width:520px;max-height:90vh;overflow:auto;border-radius:20px 20px 0 0;padding:18px 16px 22px}
+@media (min-width:600px){.ov{align-items:center}.sheet{border-radius:20px}}
+.x{position:absolute;top:8px;right:10px;border:0;background:var(--head);color:var(--fg);width:32px;height:32px;border-radius:50%;font-size:20px;cursor:pointer;line-height:1}
+.shh{display:flex;align-items:center;gap:14px;margin-bottom:14px;padding-right:34px}
+.shn{font-size:20px;font-weight:800}
+.shs{color:var(--muted);font-size:13px}
+.shov{margin-left:auto;text-align:right;font-size:30px;font-weight:800;color:var(--accent2);line-height:1}
+.shov small{display:block;font-size:11px;color:var(--muted);font-weight:600}
+.br{display:grid;grid-template-columns:128px 1fr 24px 54px;gap:8px;align-items:center;padding:5px 0;font-size:14px}
+.bt{height:10px;background:var(--head);border-radius:6px;overflow:hidden}
+.bt i{display:block;height:100%;border-radius:6px}
+.bs{font-weight:800;text-align:right}
+.bv{color:var(--muted);text-align:right;font-size:13px}
+.note{color:var(--muted);font-size:12px;margin:12px 0 0}
 </style></head><body>
-<header><h1>NBA Player Ratings</h1>
-<div class="sub">Season __SEASON__ · updated __UPDATED__ · tap a column to sort · scores 1-10, overall out of 100 · MPG is context only</div>
-<input id="q" type="search" placeholder="Search player or team">
+<div class="top"><div class="top-in">
+<h1>🏀 NBA Player Ratings</h1>
+<div class="sub">Season __SEASON__ · updated __UPDATED__</div>
+<div class="ctl">
+<input id="q" type="search" placeholder="Search a player or team">
+<div class="seg"><button id="tabL" class="on">Leaders</button><button id="tabT">Full list (advanced)</button></div>
 <label class="tg"><input id="qt" type="checkbox" checked> Qualified players only <span id="cnt"></span></label>
-<div class="sub" id="rules"></div></header>
-<div class="wrap"><table><thead id="h"></thead><tbody id="b"></tbody></table></div>
+</div></div></div>
+<div class="main">
+<div id="leaders"></div>
+<div id="tablewrap" class="wrap hide"><table><thead id="h"></thead><tbody id="b"></tbody></table></div>
+</div>
+<div class="foot"><div id="rules"></div><div>Scores are 1 to 10 in each of 10 categories (10 = league leader). Overall is the sum, out of 100. MPG is shown for context only. Tap any player for their full breakdown.</div></div>
+<div class="ov" id="ov"><div class="sheet" id="sheet"></div></div>
 <script>
 const CATS=__CATS__, ALL=__ROWS_ALL__, QUAL=__ROWS_Q__;
-let key="overall", dir=-1;
+// CATS entry: [key, label, lowerIsBetter, emoji, title]
+const $=id=>document.getElementById(id);
+let view="L", key="overall", dir=-1;
+const cur=()=>$("qt").checked?QUAL:ALL;
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const hue=sc=>"hsl("+((sc-1)*13)+",70%,45%)";
+
+function av(r,size){
+  const ini=r.name.split(" ").map(w=>w[0]).slice(0,2).join("");
+  const img=r.photo?'<img loading="lazy" alt="" src="'+esc(r.photo)+'" onerror="this.remove()">':"";
+  return '<span class="av" style="--s:'+size+'px"><span>'+esc(ini)+'</span>'+img+'</span>';
+}
+
+/* ---------- Leaders (front page) ---------- */
+function topList(rows,k,lower){
+  return rows.filter(r=>r.n[k]!==null).sort((a,b)=>{
+    if(a.s[k]!==b.s[k])return b.s[k]-a.s[k];
+    if(a.n[k]!==b.n[k])return lower?a.n[k]-b.n[k]:b.n[k]-a.n[k];
+    return b.overall-a.overall;
+  }).slice(0,10);
+}
+function card(em,title,list,val,k,cls){
+  if(!list.length)return "";
+  const f=list[0];
+  let h='<section class="card '+(cls||"")+'"><div class="ch"><span class="em">'+em+'</span>'+title+'</div>';
+  h+='<div class="lead" data-id="'+f.id+'">'+av(f,64)+'<div class="nm"><b>'+esc(f.name)+'</b><small>'+f.team+' · '+f.mpg+' MPG</small></div><div class="big">'+val(f)+'</div></div>';
+  list.slice(1).forEach((r,i)=>{
+    h+='<div class="row" data-id="'+r.id+'"><span class="rk">'+(i+2)+'</span>'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+r.team+'</small></span><span class="val">'+val(r)+'</span></div>';
+  });
+  return h+'<button class="cf" data-k="'+k+'">Full ranking →</button></section>';
+}
+function renderLeaders(){
+  const rows=cur(), q=$("q").value.trim().toLowerCase();
+  let h="";
+  if(q){
+    const m=rows.filter(r=>(r.name+" "+r.team).toLowerCase().includes(q)).slice(0,30);
+    h='<div class="card"><div class="ch">Search results</div>';
+    if(m.length){m.forEach(r=>{h+='<div class="row" data-id="'+r.id+'">'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+r.team+'</small></span><span class="val">'+r.overall+'<small>/100</small></span></div>';});}
+    else{h+='<div class="empty">No players found.'+($("qt").checked?' Try turning off “Qualified players only”.':'')+'</div>';}
+    h+='</div>';
+  }else{
+    const overall=[...rows].sort((a,b)=>b.overall-a.overall).slice(0,10);
+    h='<div class="grid">'+card("👑","Overall rating",overall,r=>r.overall+'<small>/100</small>',"overall","first");
+    CATS.forEach(c=>{h+=card(c[3],c[4],topList(rows,c[0],c[2]),r=>r.v[c[0]],c[0]);});
+    h+='</div>';
+  }
+  $("leaders").innerHTML=h;
+}
+
+/* ---------- Full list (advanced table) ---------- */
 const cols=[["name","Player"],["team","Team"],["mpg","MPG"],["gp","GP"],["overall","Overall"],...CATS.map(c=>[c[0],c[1]])];
 function val(r,k){return k in r.s?r.s[k]:(k==="mpg"?parseFloat(r.mpg):r[k]);}
-function head(){document.getElementById("h").innerHTML="<tr>"+cols.map(c=>`<th data-k="${c[0]}">${c[1]}${c[0]===key?(dir<0?" ▼":" ▲"):""}</th>`).join("")+"</tr>";
-document.querySelectorAll("th").forEach(t=>t.onclick=()=>{const k=t.dataset.k;if(k===key)dir=-dir;else{key=k;dir=(k==="name"||k==="team")?1:-1;}draw();});}
 function cmp(a,b){
-if(key in a.s){
-if(a.s[key]!==b.s[key])return a.s[key]-b.s[key];
-const lower=CATS.find(c=>c[0]===key)[2],x=a.n[key],y=b.n[key];
-if(x===null&&y===null)return 0;if(x===null)return -1;if(y===null)return 1;
-return lower?y-x:x-y;}
-const x=val(a,key),y=val(b,key);return x>y?1:x<y?-1:0;}
-function draw(){head();const q=document.getElementById("q").value.toLowerCase();
-const ROWS=document.getElementById("qt").checked?QUAL:ALL;document.getElementById("cnt").textContent="("+ROWS.length+" players)";
-const rows=ROWS.filter(r=>(r.name+" "+r.team).toLowerCase().includes(q)).sort((a,b)=>cmp(a,b)*dir);
-document.getElementById("b").innerHTML=rows.map(r=>`<tr><td>${r.name}</td><td>${r.team}</td><td>${r.mpg}</td><td>${r.gp}</td><td class="ov">${r.overall}</td>`+
-CATS.map(c=>`<td class="sc"><b style="background:hsla(${(r.s[c[0]]-1)*13},70%,45%,.35)">${r.s[c[0]]}</b><small>${r.v[c[0]]}</small></td>`).join("")+"</tr>").join("");}
-document.getElementById("q").oninput=draw;document.getElementById("qt").onchange=draw;
-document.getElementById("rules").textContent="__RULES__";draw();
+  if(key in a.s){
+    if(a.s[key]!==b.s[key])return a.s[key]-b.s[key];
+    const lower=CATS.find(c=>c[0]===key)[2],x=a.n[key],y=b.n[key];
+    if(x===null&&y===null)return 0;if(x===null)return -1;if(y===null)return 1;
+    return lower?y-x:x-y;
+  }
+  const x=val(a,key),y=val(b,key);return x>y?1:x<y?-1:0;
+}
+function renderTable(){
+  $("h").innerHTML="<tr>"+cols.map(c=>'<th data-k="'+c[0]+'">'+c[1]+(c[0]===key?(dir<0?" ▼":" ▲"):"")+"</th>").join("")+"</tr>";
+  document.querySelectorAll("th").forEach(t=>t.onclick=()=>{const k=t.dataset.k;if(k===key)dir=-dir;else{key=k;dir=(k==="name"||k==="team")?1:-1;}renderTable();});
+  const q=$("q").value.trim().toLowerCase();
+  const rows=cur().filter(r=>(r.name+" "+r.team).toLowerCase().includes(q)).sort((a,b)=>cmp(a,b)*dir);
+  $("b").innerHTML=rows.map(r=>'<tr data-id="'+r.id+'"><td><span class="pc">'+av(r,28)+'<span>'+esc(r.name)+'</span></span></td><td>'+r.team+'</td><td>'+r.mpg+'</td><td>'+r.gp+'</td><td class="o">'+r.overall+'</td>'+
+    CATS.map(c=>'<td class="sc"><b style="background:'+hue(r.s[c[0]]).replace("hsl","hsla").replace(")",",.35)")+'">'+r.s[c[0]]+'</b><small>'+r.v[c[0]]+'</small></td>').join("")+"</tr>").join("");
+}
+
+/* ---------- Player sheet ---------- */
+function openPlayer(id){
+  const r=cur().find(x=>x.id===id)||ALL.find(x=>x.id===id);
+  if(!r)return;
+  let h='<button class="x" id="cl" aria-label="Close">×</button>';
+  h+='<div class="shh">'+av(r,72)+'<div><div class="shn">'+esc(r.name)+'</div><div class="shs">'+r.team+' · '+r.mpg+' MPG · '+r.gp+' GP</div></div><div class="shov">'+r.overall+'<small>of 100</small></div></div>';
+  CATS.forEach(c=>{const sc=r.s[c[0]];
+    h+='<div class="br"><span>'+c[3]+' '+c[1]+'</span><span class="bt"><i style="width:'+(sc*10)+'%;background:'+hue(sc)+'"></i></span><span class="bs">'+sc+'</span><span class="bv">'+r.v[c[0]]+'</span></div>';});
+  h+='<p class="note">'+($("qt").checked?"Ranked among qualified players only.":"Ranked against all players.")+'</p>';
+  $("sheet").innerHTML=h;$("ov").classList.add("show");
+}
+const closeSheet=()=>$("ov").classList.remove("show");
+
+/* ---------- wiring ---------- */
+function setView(v){
+  view=v;
+  $("leaders").classList.toggle("hide",v!=="L");$("tablewrap").classList.toggle("hide",v!=="T");
+  $("tabL").classList.toggle("on",v==="L");$("tabT").classList.toggle("on",v==="T");
+  draw();
+}
+function draw(){
+  $("cnt").textContent="("+cur().length+")";
+  if(view==="L")renderLeaders();else renderTable();
+}
+document.addEventListener("click",e=>{
+  const cf=e.target.closest(".cf");
+  if(cf){key=cf.dataset.k;dir=-1;setView("T");window.scrollTo(0,0);return;}
+  if(e.target.id==="ov"||e.target.id==="cl"){closeSheet();return;}
+  if(e.target.closest("th"))return;
+  const el=e.target.closest("[data-id]");
+  if(el)openPlayer(el.dataset.id);
+});
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeSheet();});
+$("q").oninput=draw;$("qt").onchange=draw;
+$("tabL").onclick=()=>setView("L");$("tabT").onclick=()=>setView("T");
+$("rules").textContent="__RULES__";
+draw();
 </script></body></html>"""
 
 
 def write_html(rows_all, rows_q, path="index.html"):
-    cats = [[c[0], c[1], c[3]] for c in CATEGORIES]
+    cats = [[c[0], c[1], c[3], *CATEGORY_INFO[c[0]]] for c in CATEGORIES]
     a = MIN_ATTEMPTS_PER_GAME
     rules = (f"Qualified = at least {MIN_GP_PCT:.0%} of team games and {MIN_MPG:g} MPG. "
              f"Shooting % needs {a['FG_PCT']:g} FGA, {a['FT_PCT']:g} FTA, "
