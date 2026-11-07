@@ -10,6 +10,7 @@ Run:            python nba_ratings.py
 Then open:      index.html
 """
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -53,13 +54,13 @@ CATEGORIES = [
 CATEGORY_INFO = {
     "ppg": ("🔥", "Points per game"),
     "rpg": ("💪", "Rebounds per game"),
-    "apg": ("🎯", "Assists per game"),
+    "apg": ("🤝", "Assists per game"),
     "spg": ("🖐️", "Steals per game"),
     "bpg": ("🛡️", "Blocks per game"),
-    "fgp": ("✅", "Field goal %"),
-    "ftp": ("🧊", "Free throw %"),
-    "tpp": ("🏹", "3-point %"),
-    "dur": ("🧱", "Durability (games played %)"),
+    "fgp": ("🎯", "Field goal %"),
+    "ftp": ("💸", "Free throw %"),
+    "tpp": ("👌", "3-point %"),
+    "dur": ("🔋", "Durability (games played %)"),
     "tov": ("🔒", "Fewest turnovers per game"),
 }
 
@@ -87,6 +88,33 @@ _TEAMS = [
 TEAM_LOOKUP = {code: {"n": name, "a": extra}
                for canon, name, extra, others in _TEAMS
                for code in (canon, *others)}
+
+
+# ---------------------------------------------------------------- positions
+def to_groups(pos):
+    """'PG' -> 'G', 'PF' -> 'F', 'C' -> 'C', 'G-F' -> 'GF'. Unknown -> ''."""
+    if not pos:
+        return ""
+    t = str(pos).upper()
+    found = set()
+    if "GUARD" in t:
+        found.add("G")
+    if "FORWARD" in t:
+        found.add("F")
+    if "CENTER" in t:
+        found.add("C")
+    for tok in re.split(r"[^A-Z]+", t):
+        if tok in ("PG", "SG", "G"):
+            found.add("G")
+        elif tok in ("SF", "PF", "F"):
+            found.add("F")
+        elif tok == "C":
+            found.add("C")
+        elif tok in ("GF", "FG"):
+            found.update("GF")
+        elif tok in ("FC", "CF"):
+            found.update("FC")
+    return "".join(c for c in "GFC" if c in found)
 
 
 # ---------------------------------------------------------------- scoring
@@ -122,6 +150,8 @@ def compute_ratings(players, teams, qualified_only=False):
     df = players.copy()
     if "PLAYER_ID" not in df:
         df["PLAYER_ID"] = df.index.astype(str)
+    if "POS" not in df:
+        df["POS"] = ""
     if "PHOTO" not in df:  # NBA.com headshots (used when DATA_SOURCE = "nba")
         df["PHOTO"] = df["PLAYER_ID"].map(
             lambda i: f"https://cdn.nba.com/headshots/nba/latest/1040x760/{i}.png")
@@ -158,6 +188,8 @@ def compute_ratings(players, teams, qualified_only=False):
         photo = r.get("PHOTO")
         rows.append({
             "id": str(r["PLAYER_ID"]),
+            "pos": r["POS"] if isinstance(r["POS"], str) else "",
+            "g": to_groups(r["POS"]) if isinstance(r["POS"], str) else "",
             "photo": photo if isinstance(photo, str) else "",
             "name": r["PLAYER_NAME"],
             "team": r["TEAM_ABBREVIATION"],
@@ -191,6 +223,58 @@ ESPN_STATS = {
 }
 ESPN_URL = ("https://site.web.api.espn.com/apis/common/v3/sports/"
             "basketball/nba/statistics/byathlete")
+
+
+def _raw_position(a):
+    p = a.get("position")
+    if isinstance(p, dict):
+        p = p.get("abbreviation") or p.get("displayName") or p.get("name")
+    if not p:
+        p = a.get("positionAbbreviation")
+    return str(p) if p else ""
+
+
+def fetch_roster_positions():
+    """Backup plan: read each team's roster page, which lists every position."""
+    import time
+    import requests
+
+    base = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; nba-ratings)"}
+    teams = requests.get(base + "/teams", headers=headers, timeout=30).json()
+    ids = [t["team"]["id"] for t in teams["sports"][0]["leagues"][0]["teams"]]
+    found = {}
+
+    def record(a):
+        pos = a.get("position")
+        if isinstance(pos, dict):
+            pos = pos.get("abbreviation") or pos.get("displayName") or pos.get("name")
+        if pos and a.get("id"):
+            found[str(a["id"])] = str(pos)
+
+    for tid in ids:
+        data = requests.get(f"{base}/teams/{tid}/roster", headers=headers, timeout=30).json()
+        for a in data.get("athletes", []):
+            if isinstance(a, dict) and "items" in a:   # grouped layout
+                for b in a["items"]:
+                    record(b)
+            elif isinstance(a, dict):
+                record(a)
+        time.sleep(0.3)
+    return found
+
+
+def fill_positions(df):
+    """Use positions from the stats feed; if most are missing, use rosters."""
+    if (df["POS"].str.len() > 0).mean() >= 0.8:
+        return df
+    try:
+        pos = fetch_roster_positions()
+    except Exception as e:
+        print("Warning: could not load player positions:", e)
+        return df
+    df["POS"] = [p if p else pos.get(str(i), "") for p, i in zip(df["POS"], df["PLAYER_ID"])]
+    return df
 
 
 def _page_names(page):
@@ -249,6 +333,7 @@ def parse_espn(pages):
                 photo = ("https://a.espncdn.com/i/headshots/nba/players/full/"
                          f"{a['id']}.png")
             row = {
+                "POS": _raw_position(a),
                 "PHOTO": photo,
                 "PLAYER_ID": a.get("id"),
                 "PLAYER_NAME": a.get("displayName"),
@@ -304,7 +389,8 @@ def fetch_espn():
         time.sleep(0.5)
     if not pages:
         raise ValueError("ESPN returned no players")
-    return parse_espn(pages)
+    players, teams = parse_espn(pages)
+    return fill_positions(players), teams
 
 
 def fetch():
@@ -346,6 +432,14 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 .seg button.on{background:var(--accent);color:#fff}
 .tg{display:flex;align-items:center;gap:6px;font-size:13px;color:#e6e8f5;cursor:pointer}
 .tg input{accent-color:var(--accent);width:17px;height:17px}
+.pos{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.pos .pl{color:#c7cbe0;font-size:13px;margin-right:2px}
+.pp{position:relative;cursor:pointer}
+.pp input{position:absolute;opacity:0;pointer-events:none}
+.pp span{display:inline-block;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.14);color:#e6e8f5;font-size:13px;font-weight:600;border:1px solid transparent}
+.pp input:checked+span{background:var(--accent);color:#fff}
+.pp input:checked+span::before{content:"✓ "}
+.pp input:focus-visible+span{border-color:#fff}
 .main{max-width:1100px;margin:0 auto;padding:12px}
 .hide{display:none}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
@@ -375,8 +469,9 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 .empty{padding:16px 14px;color:var(--muted)}
 .st{border:0;background:none;color:var(--muted);font-size:21px;cursor:pointer;padding:0 4px;line-height:1;flex:none}
 .st.on{color:#f59e0b}
-.av{width:var(--s);height:var(--s);border-radius:50%;background:var(--head);position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;flex:none;font-weight:700;color:var(--muted);font-size:calc(var(--s)*.34)}
-.av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 12%}
+.av{width:var(--s);height:var(--s);position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;flex:none;font-weight:700;color:var(--muted);font-size:calc(var(--s)*.34)}
+.av.ini{background:var(--head);border-radius:50%}
+.av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center bottom}
 .wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:14px}
 .wrap.mt{margin-top:12px}
 table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%}
@@ -426,7 +521,9 @@ td.o{font-weight:700}
 <input id="q" type="search" placeholder="Search a player or team">
 <div class="seg"><button id="tabL" class="on">Leaders</button><button id="tabM">My team</button><button id="tabT">Full list</button></div>
 <label class="tg"><input id="qt" type="checkbox" checked> Qualified players only <span id="cnt"></span></label>
-</div></div></div>
+</div>
+<div class="pos"><span class="pl">Position</span><label class="pp"><input type="checkbox" value="G"><span>Guard (G)</span></label><label class="pp"><input type="checkbox" value="F"><span>Forward (F)</span></label><label class="pp"><input type="checkbox" value="C"><span>Center (C)</span></label></div>
+</div></div>
 <div class="main">
 <div id="leaders"></div>
 <div id="myteam" class="hide"></div>
@@ -446,6 +543,18 @@ const hue=sc=>"hsl("+((sc-1)*13)+",70%,45%)";
 const tInfo=r=>TEAMS[String(r.team).toUpperCase()]||{};
 const tName=r=>tInfo(r).n||r.team;
 const tText=r=>norm(r.name+" "+r.team+" "+tName(r)+" "+(tInfo(r).a||""));
+const sub=r=>esc(r.team)+(r.pos?" · "+esc(r.pos):"");
+
+/* ---------- position filter (checkboxes: G / F / C) ---------- */
+const PK="nba_pos_v1", POSN={G:"Guards",F:"Forwards",C:"Centers"};
+const posSel=()=>[...document.querySelectorAll(".pos input:checked")].map(i=>i.value);
+function pool(){
+  const s=posSel(), rows=cur();
+  return s.length?rows.filter(r=>r.g&&[...r.g].some(c=>s.includes(c))):rows;
+}
+function posChip(){const s=posSel();return s.length?'<span class="ct">'+s.map(x=>POSN[x]).join(" + ")+'</span>':"";}
+function restorePos(){try{const s=JSON.parse(localStorage.getItem(PK)||"[]");document.querySelectorAll(".pos input").forEach(i=>{i.checked=s.includes(i.value);});}catch(e){}}
+function savePos(){try{localStorage.setItem(PK,JSON.stringify(posSel()));}catch(e){}}
 
 /* ---------- my team (saved in this browser) ---------- */
 const SK="nba_myteam_v1";
@@ -456,18 +565,19 @@ const inTeam=id=>team.includes(id);
 function toggleTeam(id){team=inTeam(id)?team.filter(x=>x!==id):[...team,id];saveTeam();}
 const star=id=>'<button class="st'+(inTeam(id)?' on':'')+'" data-st="'+id+'" aria-label="Add or remove from my team">'+(inTeam(id)?'★':'☆')+'</button>';
 
+function avFail(img){const s=img.parentNode;s.classList.add("ini");s.textContent=s.dataset.ini;}
 function av(r,size){
-  const ini=r.name.split(" ").map(w=>w[0]).slice(0,2).join("");
-  const img=r.photo?'<img loading="lazy" alt="" src="'+esc(r.photo)+'" onerror="this.remove()">':"";
-  return '<span class="av" style="--s:'+size+'px"><span>'+esc(ini)+'</span>'+img+'</span>';
+  const ini=esc(r.name.split(" ").map(w=>w[0]).slice(0,2).join(""));
+  if(!r.photo)return '<span class="av ini" style="--s:'+size+'px">'+ini+'</span>';
+  return '<span class="av" data-ini="'+ini+'" style="--s:'+size+'px"><img loading="lazy" alt="" src="'+esc(r.photo)+'" onerror="avFail(this)"></span>';
 }
 
 /* ---------- search (players AND teams) ---------- */
 function prow(r){
-  return '<div class="row" data-id="'+r.id+'">'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+esc(r.team)+'</small></span><span class="val">'+r.overall+'<small>/100</small></span>'+star(r.id)+'</div>';
+  return '<div class="row" data-id="'+r.id+'">'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+sub(r)+'</small></span><span class="val">'+r.overall+'<small>/100</small></span>'+star(r.id)+'</div>';
 }
 function searchHTML(q){
-  const rows=cur(), nq=norm(q.trim());
+  const rows=pool(), nq=norm(q.trim());
   const teams={};
   rows.forEach(r=>{(teams[tName(r)]=teams[tName(r)]||[]).push(r);});
   const mt=Object.keys(teams).filter(n=>{const r=teams[n][0];return norm(n+" "+r.team+" "+(tInfo(r).a||"")).includes(nq);});
@@ -481,8 +591,8 @@ function searchHTML(q){
       h+='<section class="card"><div class="ch">🏀 '+esc(n)+'<span class="ct">'+list.length+' players</span></div>'+list.map(prow).join("")+'</section>';
     });
   }
-  const pool=byTeam?rows.filter(r=>!shown.has(r.id)&&norm(r.name).includes(nq)):rows.filter(r=>tText(r).includes(nq));
-  const pm=pool.slice().sort((a,b)=>b.overall-a.overall).slice(0,30);
+  const cand=byTeam?rows.filter(r=>!shown.has(r.id)&&norm(r.name).includes(nq)):rows.filter(r=>tText(r).includes(nq));
+  const pm=cand.slice().sort((a,b)=>b.overall-a.overall).slice(0,30);
   if(pm.length)h+='<section class="card"><div class="ch">Players</div>'+pm.map(prow).join("")+'</section>';
   if(!h)h='<section class="card"><div class="empty">No players or teams found.'+($("qt").checked?' Try turning off “Qualified players only”.':'')+'</div></section>';
   return '<div class="stack">'+h+'</div>';
@@ -499,17 +609,18 @@ function topList(rows,k,lower){
 function card(em,title,list,val,k,cls){
   if(!list.length)return "";
   const f=list[0];
-  let h='<section class="card '+(cls||"")+'"><div class="ch"><span class="em">'+em+'</span>'+title+'</div>';
-  h+='<div class="lead" data-id="'+f.id+'">'+av(f,64)+'<div class="nm"><b>'+esc(f.name)+'</b><small>'+esc(f.team)+' · '+f.mpg+' MPG</small></div><div class="big">'+val(f)+'</div></div>';
+  let h='<section class="card '+(cls||"")+'"><div class="ch"><span class="em">'+em+'</span>'+title+posChip()+'</div>';
+  h+='<div class="lead" data-id="'+f.id+'">'+av(f,72)+'<div class="nm"><b>'+esc(f.name)+'</b><small>'+sub(f)+' · '+f.mpg+' MPG</small></div><div class="big">'+val(f)+'</div></div>';
   list.slice(1).forEach((r,i)=>{
-    h+='<div class="row" data-id="'+r.id+'"><span class="rk">'+(i+2)+'</span>'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+esc(r.team)+'</small></span><span class="val">'+val(r)+'</span></div>';
+    h+='<div class="row" data-id="'+r.id+'"><span class="rk">'+(i+2)+'</span>'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+sub(r)+'</small></span><span class="val">'+val(r)+'</span></div>';
   });
   return h+'<button class="cf" data-k="'+k+'">Full ranking →</button></section>';
 }
 function renderLeaders(){
-  const rows=cur(), q=$("q").value.trim();
+  const rows=pool(), q=$("q").value.trim();
   let h="";
-  if(q){h=searchHTML(q);}
+  if(!rows.length){h='<section class="card"><div class="empty">No players match the selected positions. Position data comes from ESPN, and some players may be missing it.</div></section>';}
+  else if(q){h=searchHTML(q);}
   else{
     const overall=[...rows].sort((a,b)=>b.overall-a.overall).slice(0,10);
     h='<div class="grid">'+card("👑","Overall rating",overall,r=>r.overall+'<small>/100</small>',"overall","first");
@@ -520,7 +631,7 @@ function renderLeaders(){
 }
 
 /* ---------- table rows (Full list + My team) ---------- */
-const cols=[["name","Player"],["team","Team"],["mpg","MPG"],["gp","GP"],["overall","Overall"],...CATS.map(c=>[c[0],c[1]])];
+const cols=[["name","Player"],["team","Team"],["pos","Pos"],["mpg","MPG"],["gp","GP"],["overall","Overall"],...CATS.map(c=>[c[0],c[1]])];
 function val(r,k){return k in r.s?r.s[k]:(k==="mpg"?parseFloat(r.mpg):r[k]);}
 function cmp(a,b){
   if(key in a.s){
@@ -532,14 +643,14 @@ function cmp(a,b){
   const x=val(a,key),y=val(b,key);return x>y?1:x<y?-1:0;
 }
 function trow(r){
-  return '<tr data-id="'+r.id+'"><td><span class="pc">'+star(r.id)+av(r,28)+'<span>'+esc(r.name)+'</span></span></td><td>'+esc(r.team)+'</td><td>'+r.mpg+'</td><td>'+r.gp+'</td><td class="o">'+r.overall+'</td>'+
+  return '<tr data-id="'+r.id+'"><td><span class="pc">'+star(r.id)+av(r,28)+'<span>'+esc(r.name)+'</span></span></td><td>'+esc(r.team)+'</td><td>'+esc(r.pos||"—")+'</td><td>'+r.mpg+'</td><td>'+r.gp+'</td><td class="o">'+r.overall+'</td>'+
     CATS.map(c=>'<td class="sc"><b style="background:'+hue(r.s[c[0]]).replace("hsl","hsla").replace(")",",.35)")+'">'+r.s[c[0]]+'</b><small>'+r.v[c[0]]+'</small></td>').join("")+'</tr>';
 }
 function renderTable(){
   $("h").innerHTML="<tr>"+cols.map(c=>'<th data-k="'+c[0]+'">'+c[1]+(c[0]===key?(dir<0?" ▼":" ▲"):"")+"</th>").join("")+"</tr>";
   document.querySelectorAll("#h th").forEach(t=>t.onclick=()=>{const k=t.dataset.k;if(k===key)dir=-dir;else{key=k;dir=(k==="name"||k==="team")?1:-1;}renderTable();});
   const nq=norm($("q").value.trim());
-  const rows=cur().filter(r=>tText(r).includes(nq)).sort((a,b)=>cmp(a,b)*dir);
+  const rows=pool().filter(r=>tText(r).includes(nq)).sort((a,b)=>cmp(a,b)*dir);
   $("b").innerHTML=rows.map(trow).join("");
 }
 
@@ -586,7 +697,7 @@ function openPlayer(id){
   const r=cur().find(x=>x.id===id)||ALL.find(x=>x.id===id);
   if(!r)return;
   let h='<button class="x" id="cl" aria-label="Close">×</button>';
-  h+='<div class="shh">'+av(r,72)+'<div><div class="shn">'+esc(r.name)+'</div><div class="shs">'+esc(tName(r))+' · '+r.mpg+' MPG · '+r.gp+' GP</div></div><div class="shov">'+r.overall+'<small>of 100</small></div></div>';
+  h+='<div class="shh">'+av(r,72)+'<div><div class="shn">'+esc(r.name)+'</div><div class="shs">'+esc(tName(r))+(r.pos?" · "+esc(r.pos):"")+' · '+r.mpg+' MPG · '+r.gp+' GP</div></div><div class="shov">'+r.overall+'<small>of 100</small></div></div>';
   h+='<button class="addbtn" data-st="'+r.id+'">'+(inTeam(r.id)?"★ On my team · tap to remove":"☆ Add to my team")+'</button>';
   CATS.forEach(c=>{const sc=r.s[c[0]];
     h+='<div class="br"><span>'+c[3]+' '+c[1]+'</span><span class="bt"><i style="width:'+(sc*10)+'%;background:'+hue(sc)+'"></i></span><span class="bs">'+sc+'</span><span class="bv">'+r.v[c[0]]+'</span></div>';});
@@ -627,6 +738,7 @@ document.addEventListener("click",e=>{
 });
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeSheet();});
 $("q").oninput=draw;$("qt").onchange=draw;
+restorePos();document.querySelectorAll(".pos input").forEach(i=>{i.onchange=()=>{savePos();draw();};});
 $("tabL").onclick=()=>setView("L");$("tabM").onclick=()=>setView("M");$("tabT").onclick=()=>setView("T");
 $("rules").textContent="__RULES__";
 draw();
@@ -655,5 +767,10 @@ if __name__ == "__main__":
         players_df, teams_df = fetch()
     except Exception as e:  # NBA.com often blocks cloud IPs; ESPN feed can change
         sys.exit(f"Could not get the stats: {e}")
-    write_html(compute_ratings(players_df, teams_df),
-               compute_ratings(players_df, teams_df, qualified_only=True))
+    rows_all = compute_ratings(players_df, teams_df)
+    rows_q = compute_ratings(players_df, teams_df, qualified_only=True)
+    counts = {}
+    for r in rows_all:
+        counts[r["g"] or "none"] = counts.get(r["g"] or "none", 0) + 1
+    print("Positions found:", counts)
+    write_html(rows_all, rows_q)
