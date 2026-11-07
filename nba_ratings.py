@@ -64,6 +64,31 @@ CATEGORY_INFO = {
 }
 
 
+# Team names so you can search "lakers", "los angeles lakers", "LAL", etc.
+# (code, full name, extra search words, other codes ESPN / NBA.com may use)
+_TEAMS = [
+    ("ATL", "Atlanta Hawks", "", ()), ("BOS", "Boston Celtics", "", ()),
+    ("BKN", "Brooklyn Nets", "", ("BRK",)), ("CHA", "Charlotte Hornets", "", ("CHO",)),
+    ("CHI", "Chicago Bulls", "", ()), ("CLE", "Cleveland Cavaliers", "cavs", ()),
+    ("DAL", "Dallas Mavericks", "mavs", ()), ("DEN", "Denver Nuggets", "", ()),
+    ("DET", "Detroit Pistons", "", ()), ("GSW", "Golden State Warriors", "", ("GS",)),
+    ("HOU", "Houston Rockets", "", ()), ("IND", "Indiana Pacers", "", ()),
+    ("LAC", "Los Angeles Clippers", "la clippers", ()),
+    ("LAL", "Los Angeles Lakers", "la lakers", ()),
+    ("MEM", "Memphis Grizzlies", "", ()), ("MIA", "Miami Heat", "", ()),
+    ("MIL", "Milwaukee Bucks", "", ()), ("MIN", "Minnesota Timberwolves", "wolves", ()),
+    ("NOP", "New Orleans Pelicans", "pels", ("NO",)), ("NYK", "New York Knicks", "", ("NY",)),
+    ("OKC", "Oklahoma City Thunder", "", ()), ("ORL", "Orlando Magic", "", ()),
+    ("PHI", "Philadelphia 76ers", "sixers", ()), ("PHX", "Phoenix Suns", "", ("PHO",)),
+    ("POR", "Portland Trail Blazers", "blazers", ()), ("SAC", "Sacramento Kings", "", ()),
+    ("SAS", "San Antonio Spurs", "", ("SA",)), ("TOR", "Toronto Raptors", "", ()),
+    ("UTA", "Utah Jazz", "", ("UTAH",)), ("WAS", "Washington Wizards", "", ("WSH",)),
+]
+TEAM_LOOKUP = {code: {"n": name, "a": extra}
+               for canon, name, extra, others in _TEAMS
+               for code in (canon, *others)}
+
+
 # ---------------------------------------------------------------- scoring
 def tier_score(rank):
     """Dense rank -> 1-10 score. Unranked (NaN) -> 1."""
@@ -317,25 +342,29 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 .ctl input[type=search]{flex:1;min-width:170px;max-width:340px;padding:9px 12px;border-radius:10px;border:0;background:rgba(255,255,255,.15);color:#fff;font-size:16px;outline:none}
 .ctl input::placeholder{color:#c7cbe0}
 .seg{display:flex;gap:4px;background:rgba(255,255,255,.12);padding:3px;border-radius:12px}
-.seg button{border:0;background:none;color:#dfe2f3;padding:7px 12px;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer}
+.seg button{border:0;background:none;color:#dfe2f3;padding:7px 11px;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer}
 .seg button.on{background:var(--accent);color:#fff}
 .tg{display:flex;align-items:center;gap:6px;font-size:13px;color:#e6e8f5;cursor:pointer}
 .tg input{accent-color:var(--accent);width:17px;height:17px}
 .main{max-width:1100px;margin:0 auto;padding:12px}
 .hide{display:none}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
+.stack{display:grid;gap:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
 .card.first{border-color:var(--accent)}
 .ch{display:flex;align-items:center;gap:8px;padding:12px 14px 4px;font-weight:700;font-size:16px}
 .ch .em{font-size:21px}
+.ct{margin-left:auto;font-weight:500;color:var(--muted);font-size:13px}
 .lead{display:flex;align-items:center;gap:12px;margin:6px 10px;padding:10px;border-radius:12px;background:linear-gradient(135deg,rgba(249,115,22,.20),rgba(249,115,22,.05));cursor:pointer}
+.lead.static{cursor:default}
+.lead:not(.static):hover{background:var(--head)}
 .lead .nm{flex:1;min-width:0}
 .lead .nm b{font-size:17px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lead .nm small{color:var(--muted)}
 .big{font-size:26px;font-weight:800;color:var(--accent2)}
 .big small{font-size:12px;color:var(--muted);font-weight:600;margin-left:2px}
 .row{display:flex;align-items:center;gap:10px;padding:6px 14px;cursor:pointer}
-.row:hover,.lead:hover{background:var(--head)}
+.row:hover{background:var(--head)}
 .rk{width:18px;color:var(--muted);font-size:13px;text-align:right}
 .row .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .nm small{color:var(--muted);margin-left:6px}
@@ -343,33 +372,47 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 .row .val small{color:var(--muted);font-weight:600}
 .cf{display:block;width:100%;margin-top:6px;padding:11px;border:0;border-top:1px solid var(--line);background:none;color:var(--accent2);font-weight:700;font-size:14px;cursor:pointer}
 .cf:hover{background:var(--head)}
-.empty{padding:14px;color:var(--muted)}
+.empty{padding:16px 14px;color:var(--muted)}
+.st{border:0;background:none;color:var(--muted);font-size:21px;cursor:pointer;padding:0 4px;line-height:1;flex:none}
+.st.on{color:#f59e0b}
 .av{width:var(--s);height:var(--s);border-radius:50%;background:var(--head);position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;flex:none;font-weight:700;color:var(--muted);font-size:calc(var(--s)*.34)}
 .av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 12%}
 .wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:14px}
+.wrap.mt{margin-top:12px}
 table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%}
 th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:center;white-space:nowrap}
 th{background:var(--head);position:sticky;top:0;cursor:pointer;user-select:none;z-index:2}
-th:first-child,td:first-child{position:sticky;left:0;text-align:left;background:var(--card);z-index:1;min-width:190px}
+.static-th th{cursor:default}
+th:first-child,td:first-child{position:sticky;left:0;text-align:left;background:var(--card);z-index:1;min-width:210px}
 th:first-child{background:var(--head);z-index:3}
 tbody tr{cursor:pointer}
 tbody tr:hover td{background:var(--head)}
-.pc{display:flex;align-items:center;gap:8px}
+.pc{display:flex;align-items:center;gap:6px}
 td small{display:block;color:var(--muted);font-size:10px}
 td.sc b{display:block;border-radius:6px;padding:2px 0;min-width:30px}
 td.o{font-weight:700}
+.tot{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin:8px 14px 2px}
+.tot div{background:var(--head);border-radius:10px;padding:8px 2px;text-align:center}
+.tot b{display:block;font-size:17px}
+.tot small{color:var(--muted);font-size:11px}
+@media (max-width:520px){.tot{grid-template-columns:repeat(3,1fr)}}
+.cap{color:var(--muted);font-size:12px;margin:6px 14px 4px}
+.prof{padding:4px 14px 12px}
 .foot{max-width:1100px;margin:0 auto;padding:6px 14px 28px;color:var(--muted);font-size:12px}
 .ov{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;justify-content:center;z-index:50}
 .ov.show{display:flex}
 .sheet{position:relative;background:var(--card);width:100%;max-width:520px;max-height:90vh;overflow:auto;border-radius:20px 20px 0 0;padding:18px 16px 22px}
 @media (min-width:600px){.ov{align-items:center}.sheet{border-radius:20px}}
 .x{position:absolute;top:8px;right:10px;border:0;background:var(--head);color:var(--fg);width:32px;height:32px;border-radius:50%;font-size:20px;cursor:pointer;line-height:1}
-.shh{display:flex;align-items:center;gap:14px;margin-bottom:14px;padding-right:34px}
+.shh{display:flex;align-items:center;gap:14px;margin-bottom:12px;padding-right:34px}
 .shn{font-size:20px;font-weight:800}
 .shs{color:var(--muted);font-size:13px}
 .shov{margin-left:auto;text-align:right;font-size:30px;font-weight:800;color:var(--accent2);line-height:1}
 .shov small{display:block;font-size:11px;color:var(--muted);font-weight:600}
+.addbtn{display:block;width:100%;margin:0 0 12px;padding:10px;border-radius:12px;border:1px solid var(--accent);background:none;color:var(--accent2);font-weight:700;font-size:14px;cursor:pointer}
+.addbtn:hover{background:var(--head)}
 .br{display:grid;grid-template-columns:128px 1fr 24px 54px;gap:8px;align-items:center;padding:5px 0;font-size:14px}
+.br.avg{grid-template-columns:128px 1fr 40px}
 .bt{height:10px;background:var(--head);border-radius:6px;overflow:hidden}
 .bt i{display:block;height:100%;border-radius:6px}
 .bs{font-weight:800;text-align:right}
@@ -381,28 +424,68 @@ td.o{font-weight:700}
 <div class="sub">Season __SEASON__ · updated __UPDATED__</div>
 <div class="ctl">
 <input id="q" type="search" placeholder="Search a player or team">
-<div class="seg"><button id="tabL" class="on">Leaders</button><button id="tabT">Full list (advanced)</button></div>
+<div class="seg"><button id="tabL" class="on">Leaders</button><button id="tabM">My team</button><button id="tabT">Full list</button></div>
 <label class="tg"><input id="qt" type="checkbox" checked> Qualified players only <span id="cnt"></span></label>
 </div></div></div>
 <div class="main">
 <div id="leaders"></div>
+<div id="myteam" class="hide"></div>
 <div id="tablewrap" class="wrap hide"><table><thead id="h"></thead><tbody id="b"></tbody></table></div>
 </div>
-<div class="foot"><div id="rules"></div><div>Scores are 1 to 10 in each of 10 categories (10 = league leader). Overall is the sum, out of 100. MPG is shown for context only. Tap any player for their full breakdown.</div></div>
+<div class="foot"><div id="rules"></div><div>Scores are 1 to 10 in each of 10 categories (10 = league leader). Overall is the sum, out of 100. MPG is shown for context only. Tap any player for their full breakdown, and tap ☆ to add them to My team.</div></div>
 <div class="ov" id="ov"><div class="sheet" id="sheet"></div></div>
 <script>
-const CATS=__CATS__, ALL=__ROWS_ALL__, QUAL=__ROWS_Q__;
+const CATS=__CATS__, ALL=__ROWS_ALL__, QUAL=__ROWS_Q__, TEAMS=__TEAMS__;
 // CATS entry: [key, label, lowerIsBetter, emoji, title]
 const $=id=>document.getElementById(id);
 let view="L", key="overall", dir=-1;
 const cur=()=>$("qt").checked?QUAL:ALL;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const norm=s=>String(s).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
 const hue=sc=>"hsl("+((sc-1)*13)+",70%,45%)";
+const tInfo=r=>TEAMS[String(r.team).toUpperCase()]||{};
+const tName=r=>tInfo(r).n||r.team;
+const tText=r=>norm(r.name+" "+r.team+" "+tName(r)+" "+(tInfo(r).a||""));
+
+/* ---------- my team (saved in this browser) ---------- */
+const SK="nba_myteam_v1";
+function loadTeam(){try{const t=JSON.parse(localStorage.getItem(SK)||"[]");return Array.isArray(t)?t.map(String):[];}catch(e){return [];}}
+let team=loadTeam();
+function saveTeam(){try{localStorage.setItem(SK,JSON.stringify(team));}catch(e){}}
+const inTeam=id=>team.includes(id);
+function toggleTeam(id){team=inTeam(id)?team.filter(x=>x!==id):[...team,id];saveTeam();}
+const star=id=>'<button class="st'+(inTeam(id)?' on':'')+'" data-st="'+id+'" aria-label="Add or remove from my team">'+(inTeam(id)?'★':'☆')+'</button>';
 
 function av(r,size){
   const ini=r.name.split(" ").map(w=>w[0]).slice(0,2).join("");
   const img=r.photo?'<img loading="lazy" alt="" src="'+esc(r.photo)+'" onerror="this.remove()">':"";
   return '<span class="av" style="--s:'+size+'px"><span>'+esc(ini)+'</span>'+img+'</span>';
+}
+
+/* ---------- search (players AND teams) ---------- */
+function prow(r){
+  return '<div class="row" data-id="'+r.id+'">'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+esc(r.team)+'</small></span><span class="val">'+r.overall+'<small>/100</small></span>'+star(r.id)+'</div>';
+}
+function searchHTML(q){
+  const rows=cur(), nq=norm(q.trim());
+  const teams={};
+  rows.forEach(r=>{(teams[tName(r)]=teams[tName(r)]||[]).push(r);});
+  const mt=Object.keys(teams).filter(n=>{const r=teams[n][0];return norm(n+" "+r.team+" "+(tInfo(r).a||"")).includes(nq);});
+  const byTeam=mt.length>=1&&mt.length<=3;
+  const shown=new Set();
+  let h="";
+  if(byTeam){
+    mt.forEach(n=>{
+      const list=teams[n].slice().sort((a,b)=>b.overall-a.overall);
+      list.forEach(r=>shown.add(r.id));
+      h+='<section class="card"><div class="ch">🏀 '+esc(n)+'<span class="ct">'+list.length+' players</span></div>'+list.map(prow).join("")+'</section>';
+    });
+  }
+  const pool=byTeam?rows.filter(r=>!shown.has(r.id)&&norm(r.name).includes(nq)):rows.filter(r=>tText(r).includes(nq));
+  const pm=pool.slice().sort((a,b)=>b.overall-a.overall).slice(0,30);
+  if(pm.length)h+='<section class="card"><div class="ch">Players</div>'+pm.map(prow).join("")+'</section>';
+  if(!h)h='<section class="card"><div class="empty">No players or teams found.'+($("qt").checked?' Try turning off “Qualified players only”.':'')+'</div></section>';
+  return '<div class="stack">'+h+'</div>';
 }
 
 /* ---------- Leaders (front page) ---------- */
@@ -417,22 +500,17 @@ function card(em,title,list,val,k,cls){
   if(!list.length)return "";
   const f=list[0];
   let h='<section class="card '+(cls||"")+'"><div class="ch"><span class="em">'+em+'</span>'+title+'</div>';
-  h+='<div class="lead" data-id="'+f.id+'">'+av(f,64)+'<div class="nm"><b>'+esc(f.name)+'</b><small>'+f.team+' · '+f.mpg+' MPG</small></div><div class="big">'+val(f)+'</div></div>';
+  h+='<div class="lead" data-id="'+f.id+'">'+av(f,64)+'<div class="nm"><b>'+esc(f.name)+'</b><small>'+esc(f.team)+' · '+f.mpg+' MPG</small></div><div class="big">'+val(f)+'</div></div>';
   list.slice(1).forEach((r,i)=>{
-    h+='<div class="row" data-id="'+r.id+'"><span class="rk">'+(i+2)+'</span>'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+r.team+'</small></span><span class="val">'+val(r)+'</span></div>';
+    h+='<div class="row" data-id="'+r.id+'"><span class="rk">'+(i+2)+'</span>'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+esc(r.team)+'</small></span><span class="val">'+val(r)+'</span></div>';
   });
   return h+'<button class="cf" data-k="'+k+'">Full ranking →</button></section>';
 }
 function renderLeaders(){
-  const rows=cur(), q=$("q").value.trim().toLowerCase();
+  const rows=cur(), q=$("q").value.trim();
   let h="";
-  if(q){
-    const m=rows.filter(r=>(r.name+" "+r.team).toLowerCase().includes(q)).slice(0,30);
-    h='<div class="card"><div class="ch">Search results</div>';
-    if(m.length){m.forEach(r=>{h+='<div class="row" data-id="'+r.id+'">'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+r.team+'</small></span><span class="val">'+r.overall+'<small>/100</small></span></div>';});}
-    else{h+='<div class="empty">No players found.'+($("qt").checked?' Try turning off “Qualified players only”.':'')+'</div>';}
-    h+='</div>';
-  }else{
+  if(q){h=searchHTML(q);}
+  else{
     const overall=[...rows].sort((a,b)=>b.overall-a.overall).slice(0,10);
     h='<div class="grid">'+card("👑","Overall rating",overall,r=>r.overall+'<small>/100</small>',"overall","first");
     CATS.forEach(c=>{h+=card(c[3],c[4],topList(rows,c[0],c[2]),r=>r.v[c[0]],c[0]);});
@@ -441,7 +519,7 @@ function renderLeaders(){
   $("leaders").innerHTML=h;
 }
 
-/* ---------- Full list (advanced table) ---------- */
+/* ---------- table rows (Full list + My team) ---------- */
 const cols=[["name","Player"],["team","Team"],["mpg","MPG"],["gp","GP"],["overall","Overall"],...CATS.map(c=>[c[0],c[1]])];
 function val(r,k){return k in r.s?r.s[k]:(k==="mpg"?parseFloat(r.mpg):r[k]);}
 function cmp(a,b){
@@ -453,13 +531,54 @@ function cmp(a,b){
   }
   const x=val(a,key),y=val(b,key);return x>y?1:x<y?-1:0;
 }
+function trow(r){
+  return '<tr data-id="'+r.id+'"><td><span class="pc">'+star(r.id)+av(r,28)+'<span>'+esc(r.name)+'</span></span></td><td>'+esc(r.team)+'</td><td>'+r.mpg+'</td><td>'+r.gp+'</td><td class="o">'+r.overall+'</td>'+
+    CATS.map(c=>'<td class="sc"><b style="background:'+hue(r.s[c[0]]).replace("hsl","hsla").replace(")",",.35)")+'">'+r.s[c[0]]+'</b><small>'+r.v[c[0]]+'</small></td>').join("")+'</tr>';
+}
 function renderTable(){
   $("h").innerHTML="<tr>"+cols.map(c=>'<th data-k="'+c[0]+'">'+c[1]+(c[0]===key?(dir<0?" ▼":" ▲"):"")+"</th>").join("")+"</tr>";
-  document.querySelectorAll("th").forEach(t=>t.onclick=()=>{const k=t.dataset.k;if(k===key)dir=-dir;else{key=k;dir=(k==="name"||k==="team")?1:-1;}renderTable();});
-  const q=$("q").value.trim().toLowerCase();
-  const rows=cur().filter(r=>(r.name+" "+r.team).toLowerCase().includes(q)).sort((a,b)=>cmp(a,b)*dir);
-  $("b").innerHTML=rows.map(r=>'<tr data-id="'+r.id+'"><td><span class="pc">'+av(r,28)+'<span>'+esc(r.name)+'</span></span></td><td>'+r.team+'</td><td>'+r.mpg+'</td><td>'+r.gp+'</td><td class="o">'+r.overall+'</td>'+
-    CATS.map(c=>'<td class="sc"><b style="background:'+hue(r.s[c[0]]).replace("hsl","hsla").replace(")",",.35)")+'">'+r.s[c[0]]+'</b><small>'+r.v[c[0]]+'</small></td>').join("")+"</tr>").join("");
+  document.querySelectorAll("#h th").forEach(t=>t.onclick=()=>{const k=t.dataset.k;if(k===key)dir=-dir;else{key=k;dir=(k==="name"||k==="team")?1:-1;}renderTable();});
+  const nq=norm($("q").value.trim());
+  const rows=cur().filter(r=>tText(r).includes(nq)).sort((a,b)=>cmp(a,b)*dir);
+  $("b").innerHTML=rows.map(trow).join("");
+}
+
+/* ---------- My team ---------- */
+function summary(mine){
+  const n=mine.length;
+  const avgO=(mine.reduce((s,r)=>s+r.overall,0)/n).toFixed(1);
+  const avg=c=>mine.reduce((s,r)=>s+r.s[c[0]],0)/n;
+  const ranked=CATS.map(c=>({c:c,a:avg(c)})).sort((x,y)=>y.a-x.a);
+  const lab=o=>o.c[3]+" "+o.c[1];
+  const best=ranked.slice(0,2).map(lab).join(", "), worst=ranked.slice(-2).reverse().map(lab).join(", ");
+  const tot=k=>mine.reduce((s,r)=>s+(r.n[k]||0),0).toFixed(1);
+  let h='<section class="card"><div class="ch"><span class="em">⭐</span>My team<span class="ct">'+n+' player'+(n===1?"":"s")+'</span></div>';
+  h+='<div class="lead static"><div class="nm"><b>Average overall</b><small>Strongest: '+best+'<br>Weakest: '+worst+'</small></div><div class="big">'+avgO+'<small>/100</small></div></div>';
+  h+='<div class="cap">Combined per-game totals</div><div class="tot">'+
+    [["ppg","PTS"],["rpg","REB"],["apg","AST"],["spg","STL"],["bpg","BLK"],["tov","TO"]].map(p=>'<div><b>'+tot(p[0])+'</b><small>'+p[1]+'</small></div>').join("")+'</div>';
+  h+='<div class="cap">Average category score (1 to 10)</div><div class="prof">'+
+    CATS.map(c=>{const a=avg(c);return '<div class="br avg"><span>'+c[3]+' '+c[1]+'</span><span class="bt"><i style="width:'+(a*10)+'%;background:'+hue(a)+'"></i></span><span class="bs">'+a.toFixed(1)+'</span></div>';}).join("")+'</div></section>';
+  return h;
+}
+function renderTeam(){
+  const rows=cur(), byId={};
+  rows.forEach(r=>{byId[r.id]=r;});
+  const q=$("q").value.trim();
+  const mine=team.map(id=>byId[id]).filter(Boolean).sort((a,b)=>b.overall-a.overall);
+  const missing=team.filter(id=>!byId[id]).length;
+  let h="";
+  if(q)h+='<div class="cap" style="margin-left:2px">Tap ☆ to add players to your team</div>'+searchHTML(q)+'<div style="height:12px"></div>';
+  if(!team.length){
+    h+='<section class="card"><div class="empty">Your team is empty. Type a player or a team (try “Lakers”) in the search box above, then tap ☆ next to a player to add them.</div></section>';
+  }else{
+    if(mine.length)h+=summary(mine);
+    if(mine.length){
+      h+='<div class="wrap mt"><table class="static-th"><thead><tr>'+cols.map(c=>'<th>'+c[1]+'</th>').join("")+'</tr></thead><tbody>'+mine.map(trow).join("")+'</tbody></table></div>';
+    }
+    if(missing)h+='<p class="note">'+missing+' saved player'+(missing===1?" isn’t":"s aren’t")+' rated in this view (not qualified, or not in the data). Turn off “Qualified players only” to see them.</p>';
+    h+='<p class="note">Your team is saved in this browser on this device. Ratings update every night.</p>';
+  }
+  $("myteam").innerHTML=h;
 }
 
 /* ---------- Player sheet ---------- */
@@ -467,7 +586,8 @@ function openPlayer(id){
   const r=cur().find(x=>x.id===id)||ALL.find(x=>x.id===id);
   if(!r)return;
   let h='<button class="x" id="cl" aria-label="Close">×</button>';
-  h+='<div class="shh">'+av(r,72)+'<div><div class="shn">'+esc(r.name)+'</div><div class="shs">'+r.team+' · '+r.mpg+' MPG · '+r.gp+' GP</div></div><div class="shov">'+r.overall+'<small>of 100</small></div></div>';
+  h+='<div class="shh">'+av(r,72)+'<div><div class="shn">'+esc(r.name)+'</div><div class="shs">'+esc(tName(r))+' · '+r.mpg+' MPG · '+r.gp+' GP</div></div><div class="shov">'+r.overall+'<small>of 100</small></div></div>';
+  h+='<button class="addbtn" data-st="'+r.id+'">'+(inTeam(r.id)?"★ On my team · tap to remove":"☆ Add to my team")+'</button>';
   CATS.forEach(c=>{const sc=r.s[c[0]];
     h+='<div class="br"><span>'+c[3]+' '+c[1]+'</span><span class="bt"><i style="width:'+(sc*10)+'%;background:'+hue(sc)+'"></i></span><span class="bs">'+sc+'</span><span class="bv">'+r.v[c[0]]+'</span></div>';});
   h+='<p class="note">'+($("qt").checked?"Ranked among qualified players only.":"Ranked against all players.")+'</p>';
@@ -476,17 +596,28 @@ function openPlayer(id){
 const closeSheet=()=>$("ov").classList.remove("show");
 
 /* ---------- wiring ---------- */
+const HOLD={L:"Search a player or team",M:"Search to add players (name or team)",T:"Filter by player or team"};
 function setView(v){
   view=v;
-  $("leaders").classList.toggle("hide",v!=="L");$("tablewrap").classList.toggle("hide",v!=="T");
-  $("tabL").classList.toggle("on",v==="L");$("tabT").classList.toggle("on",v==="T");
+  $("leaders").classList.toggle("hide",v!=="L");
+  $("myteam").classList.toggle("hide",v!=="M");
+  $("tablewrap").classList.toggle("hide",v!=="T");
+  $("tabL").classList.toggle("on",v==="L");$("tabM").classList.toggle("on",v==="M");$("tabT").classList.toggle("on",v==="T");
+  $("q").placeholder=HOLD[v];
   draw();
 }
 function draw(){
   $("cnt").textContent="("+cur().length+")";
-  if(view==="L")renderLeaders();else renderTable();
+  if(view==="L")renderLeaders();else if(view==="M")renderTeam();else renderTable();
 }
 document.addEventListener("click",e=>{
+  const st=e.target.closest("[data-st]");
+  if(st){
+    const id=st.dataset.st,fromSheet=st.classList.contains("addbtn");
+    toggleTeam(id);draw();
+    if(fromSheet)openPlayer(id);
+    return;
+  }
   const cf=e.target.closest(".cf");
   if(cf){key=cf.dataset.k;dir=-1;setView("T");window.scrollTo(0,0);return;}
   if(e.target.id==="ov"||e.target.id==="cl"){closeSheet();return;}
@@ -496,7 +627,7 @@ document.addEventListener("click",e=>{
 });
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeSheet();});
 $("q").oninput=draw;$("qt").onchange=draw;
-$("tabL").onclick=()=>setView("L");$("tabT").onclick=()=>setView("T");
+$("tabL").onclick=()=>setView("L");$("tabM").onclick=()=>setView("M");$("tabT").onclick=()=>setView("T");
 $("rules").textContent="__RULES__";
 draw();
 </script></body></html>"""
@@ -511,6 +642,7 @@ def write_html(rows_all, rows_q, path="index.html"):
     html = (HTML.replace("__SEASON__", SEASON)
                 .replace("__CATS__", json.dumps(cats))
                 .replace("__RULES__", rules)
+                .replace("__TEAMS__", json.dumps(TEAM_LOOKUP))
                 .replace("__UPDATED__", datetime.now(ZoneInfo("America/Toronto")).strftime("%b %d, %I:%M %p ET"))
                 .replace("__ROWS_ALL__", json.dumps(rows_all))
                 .replace("__ROWS_Q__", json.dumps(rows_q)))
