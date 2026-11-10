@@ -835,14 +835,14 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 .tg input{accent-color:var(--accent);width:17px;height:17px}
 .ssel select{background:rgba(255,255,255,.15);color:#fff;border:0;border-radius:10px;padding:7px 10px;font-size:14px;font-weight:600;margin-bottom:10px}
 .ssel option{color:#000}
-.pos{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
-.pos .pl{color:#c7cbe0;font-size:13px;margin-right:2px}
-.pp{position:relative;cursor:pointer}
+.pos{display:flex;flex-wrap:nowrap;align-items:center;gap:4px;margin-top:10px;overflow-x:auto}
+.pos .pl{color:#c7cbe0;font-size:11.5px;flex:none}
+.pp{position:relative;cursor:pointer;flex:none}
 .pp input{position:absolute;opacity:0;pointer-events:none}
-.pp span{display:inline-block;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.14);color:#e6e8f5;font-size:13px;font-weight:600;border:1px solid transparent}
+.pp span{display:inline-block;padding:5px 7px;white-space:nowrap;border-radius:999px;background:rgba(255,255,255,.14);color:#e6e8f5;font-size:12.5px;font-weight:600;border:1px solid transparent}
 .pp input:checked+span{background:var(--accent);color:#fff}
-.pp input:checked+span::before{content:"✓ "}
 .pp input:focus-visible+span{border-color:#fff}
+.main.wide{max-width:1500px}
 .main{max-width:1100px;margin:0 auto;padding:12px}
 .hide{display:none}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
@@ -877,6 +877,10 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 .av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center bottom}
 .wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:14px}
 .wrap.mt{margin-top:12px}
+.hwrap{position:sticky;top:0;z-index:6;overflow:hidden;background:var(--head);border:1px solid var(--line);border-bottom:0;border-radius:14px 14px 0 0}
+.bwrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-top:0;border-radius:0 0 14px 14px}
+.ft{table-layout:fixed;min-width:100%}
+.hwrap th{border-bottom:1px solid var(--line)}
 table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%}
 th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:center;white-space:nowrap}
 th{background:var(--head);position:sticky;top:0;cursor:pointer;user-select:none;z-index:2}
@@ -884,6 +888,11 @@ th{background:var(--head);position:sticky;top:0;cursor:pointer;user-select:none;
 th:first-child,td:first-child{position:sticky;left:0;background:var(--card);z-index:1;padding:4px 6px;border-right:1px solid var(--line)}
 th:first-child{background:var(--head);z-index:3}
 td.nmc,th:nth-child(2){text-align:left;min-width:170px}
+td.nmc{overflow:hidden}
+.nmc .pc{min-width:0}
+.nmt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ib{flex:none}
+th{overflow:hidden;text-overflow:ellipsis;font-size:14px}
 tbody tr{cursor:pointer}
 tbody tr:hover td{background:var(--head)}
 .pc{display:flex;align-items:center;gap:6px}
@@ -964,14 +973,18 @@ td.o{font-weight:700}
 <label class="tg"><input id="qt" type="checkbox" checked> Qualified players only <span id="cnt"></span></label>
 </div>
 <div class="pos"><span class="pl">Position</span><label class="pp"><input type="checkbox" value="G"><span>Guard (G)</span></label><label class="pp"><input type="checkbox" value="F"><span>Forward (F)</span></label><label class="pp"><input type="checkbox" value="C"><span>Center (C)</span></label></div>
+<label class="tg" id="prkwrap" style="display:none;margin-top:8px"><input id="prk" type="checkbox"> Re-rank within selected positions</label>
 </div></div>
 <div class="main">
 <div id="leaders"></div>
 <div id="myteam" class="hide"></div>
 <div id="research" class="hide"></div>
-<div id="tablewrap" class="wrap hide"><table><thead id="h"></thead><tbody id="b"></tbody></table></div>
+<div id="tablewrap" class="hide">
+<div id="hwrap" class="hwrap"><table class="ft" id="t1"><colgroup id="cg1"></colgroup><thead id="h"></thead></table></div>
+<div id="bwrap" class="bwrap"><table class="ft" id="t2"><colgroup id="cg2"></colgroup><tbody id="b"></tbody></table></div>
 </div>
-<div class="foot"><div id="rules"></div><div id="mvnote"></div><div>Scores are 1 to 10 in each of 10 categories (10 = league leader). Overall is the sum, out of 100. MPG is shown for context only. Tap any player for their full breakdown, and tap ☆ to add them to My team.</div></div>
+</div>
+<div class="foot"><div id="rules"></div><div id="mvnote"></div><div>Scores are 1 to 10 in each of 10 categories (10 = league leader). Overall is the sum, out of 100. MPG is shown for context only. Tap any player for their full breakdown, and tap ☆ to add them to My team. With a position selected, “Re-rank within selected positions” scores each player only against others at that position.</div></div>
 <div class="ov" id="ov"><div class="sheet" id="sheet"></div></div>
 <script>
 const CATS=__CATS__, DATA=__DATA__, TEAMS=__TEAMS__;
@@ -992,15 +1005,30 @@ const tText=r=>norm(r.name+" "+r.team+" "+tName(r)+" "+(tInfo(r).a||""));
 const sub=r=>esc(r.team)+(r.pos?" · "+esc(r.pos):"");
 
 /* ---------- position filter (checkboxes: G / F / C) ---------- */
-const PK="nba_pos_v1", POSN={G:"Guards",F:"Forwards",C:"Centers"};
+const PK="nba_pos_v1", PRK="nba_prk_v1", POSN={G:"Guards",F:"Forwards",C:"Centers"};
 const posSel=()=>[...document.querySelectorAll(".pos input:checked")].map(i=>i.value);
+const rel=()=>posSel().length>0&&$("prk").checked;
+const posNames=()=>posSel().map(x=>POSN[x]).join(" + ");
+/* same scoring as the script: dense ranking, 10 = leader, 9 = ranks 2-5, 8 = 6-10, ... 1 = outside the top 40 */
+function tierScore(rank){if(rank===1)return 10;if(rank<=5)return 9;if(rank>=41)return 1;return 8-Math.floor((rank-6)/5);}
+function denseScores(vals,lower){
+  const uniq=[...new Set(vals.filter(v=>v!==null&&v!==undefined))].sort((a,b)=>lower?a-b:b-a);
+  const rk=new Map(uniq.map((v,i)=>[v,i+1]));
+  return vals.map(v=>(v===null||v===undefined)?1:tierScore(rk.get(v)));
+}
+function rescore(rows){
+  const sc=CATS.map(c=>denseScores(rows.map(r=>r.n[c[0]]),c[2]));
+  return rows.map((r,i)=>{const s={};let t=0;CATS.forEach((c,j)=>{s[c[0]]=sc[j][i];t+=sc[j][i];});return Object.assign({},r,{s:s,overall:t});});
+}
 function pool(){
   const s=posSel(), rows=cur();
-  return s.length?rows.filter(r=>r.g&&[...r.g].some(c=>s.includes(c))):rows;
+  if(!s.length)return rows;
+  const sub=rows.filter(r=>r.g&&[...r.g].some(c=>s.includes(c)));
+  return $("prk").checked?rescore(sub):sub;
 }
-function posChip(){const s=posSel();return s.length?'<span class="ct">'+s.map(x=>POSN[x]).join(" + ")+'</span>':"";}
-function restorePos(){try{const s=JSON.parse(localStorage.getItem(PK)||"[]");document.querySelectorAll(".pos input").forEach(i=>{i.checked=s.includes(i.value);});}catch(e){}}
-function savePos(){try{localStorage.setItem(PK,JSON.stringify(posSel()));}catch(e){}}
+function posChip(){const s=posSel();return s.length?'<span class="ct">'+posNames()+(rel()?' · ranked among them':'')+'</span>':"";}
+function restorePos(){try{const s=JSON.parse(localStorage.getItem(PK)||"[]");document.querySelectorAll(".pos input").forEach(i=>{i.checked=s.includes(i.value);});$("prk").checked=localStorage.getItem(PRK)==="1";}catch(e){}}
+function savePos(){try{localStorage.setItem(PK,JSON.stringify(posSel()));localStorage.setItem(PRK,$("prk").checked?"1":"0");}catch(e){}}
 
 /* ---------- my team (saved in this browser) ---------- */
 const SK="nba_myteam_v1";
@@ -1047,7 +1075,7 @@ function searchHTML(q){
 function ibt(s){const t=String(s||"").toLowerCase();return t.includes("out")?"OUT":t.includes("day")?"DTD":t.includes("question")?"Q":t.includes("doubt")?"D":t.includes("prob")?"P":s?String(s).slice(0,4).toUpperCase():"";}
 function ib(id){const i=isCur()?INJ[id]:null;if(!i||!i.s)return "";const t=ibt(i.s);return '<span class="ib'+(t==="OUT"?" out":"")+'" title="'+esc(i.s+(i.d?": "+i.d:""))+'">'+t+'</span>';}
 function moves(rows,k,lower){
-  if(!BASE||!isCur())return null;
+  if(!BASE||!isCur()||rel())return null;
   const idx=k==="overall"?-1:CATS.findIndex(c=>c[0]===k), both=[];
   rows.forEach(r=>{
     const b=BASE.p[r.id];if(!b)return;
@@ -1097,6 +1125,13 @@ function renderLeaders(){
 }
 
 /* ---------- table rows (Full list + My team) ---------- */
+const COLW=[46,270,64,48,52,44,92,...CATS.map(()=>60)];
+function layoutTable(){
+  const cg=COLW.map(w=>'<col style="width:'+w+'px">').join(""), tw=COLW.reduce((a,b)=>a+b,0)+"px";
+  ["cg1","cg2"].forEach(id=>{$(id).innerHTML=cg;});
+  ["t1","t2"].forEach(id=>{$(id).style.minWidth=tw;$(id).style.width="100%";});
+  $("bwrap").addEventListener("scroll",()=>{$("hwrap").scrollLeft=$("bwrap").scrollLeft;});
+}
 const cols=[["name","Player"],["team","Team"],["pos","Pos"],["mpg","MPG"],["gp","GP"],["overall","Overall"],...CATS.map(c=>[c[0],c[1]])];
 function val(r,k){return k in r.s?r.s[k]:(k==="mpg"?parseFloat(r.mpg):r[k]);}
 function cmp(a,b){
@@ -1109,7 +1144,7 @@ function cmp(a,b){
   const x=val(a,key),y=val(b,key);return x>y?1:x<y?-1:0;
 }
 function trow(r){
-  return '<tr data-id="'+r.id+'"><td class="pk">'+av(r,32)+'</td><td class="nmc"><span class="pc">'+star(r.id)+'<span>'+esc(r.name)+'</span>'+ib(r.id)+'</span></td><td>'+esc(r.team)+'</td><td>'+esc(r.pos||"—")+'</td><td>'+r.mpg+'</td><td>'+r.gp+'</td><td class="o">'+r.overall+'</td>'+
+  return '<tr data-id="'+r.id+'"><td class="pk">'+av(r,32)+'</td><td class="nmc"><span class="pc">'+star(r.id)+'<span class="nmt" title="'+esc(r.name)+'">'+esc(r.name)+'</span>'+ib(r.id)+'</span></td><td>'+esc(r.team)+'</td><td>'+esc(r.pos||"—")+'</td><td>'+r.mpg+'</td><td>'+r.gp+'</td><td class="o">'+r.overall+'</td>'+
     CATS.map(c=>'<td class="sc"><b style="background:'+hue(r.s[c[0]]).replace("hsl","hsla").replace(")",",.35)")+'">'+r.s[c[0]]+'</b><small>'+r.v[c[0]]+'</small></td>').join("")+'</tr>';
 }
 function renderTable(){
@@ -1234,7 +1269,7 @@ function renderResearch(){
 
 /* ---------- Player sheet ---------- */
 function openPlayer(id){
-  const r=cur().find(x=>x.id===id)||ALL.find(x=>x.id===id);
+  const r=pool().find(x=>x.id===id)||cur().find(x=>x.id===id)||ALL.find(x=>x.id===id);
   if(!r)return;
   let h='<button class="x" id="cl" aria-label="Close">×</button>';
   const b=isCur()&&BASE&&BASE.p[r.id], bo=b?($("qt").checked?b[1]:b[0]):null;
@@ -1245,7 +1280,7 @@ function openPlayer(id){
   h+='<div class="abr"><button class="addbtn" data-st="'+r.id+'">'+(inTeam(r.id)?"★ On my team":"☆ Add to my team")+'</button><button class="addbtn" data-cmpopen="'+r.id+'">⚖️ Compare players</button></div>';
   CATS.forEach(c=>{const sc=r.s[c[0]];
     h+='<div class="br"><span>'+c[3]+' '+c[1]+'</span><span class="bt"><i style="width:'+(sc*10)+'%;background:'+hue(sc)+'"></i></span><span class="bs">'+sc+'</span><span class="bv">'+r.v[c[0]]+'</span></div>';});
-  h+='<p class="note">'+($("qt").checked?"Ranked among qualified players only.":"Ranked against all players.")+'</p>';
+  h+='<p class="note">'+(rel()?"Ranked only among "+posNames().toLowerCase()+($("qt").checked?" (qualified players).":"."):$("qt").checked?"Ranked among qualified players only.":"Ranked against all players.")+'</p>';
   $("sheet").innerHTML=h;$("ov").classList.add("show");
 }
 const closeSheet=()=>$("ov").classList.remove("show");
@@ -1256,6 +1291,7 @@ function setView(v){
   view=v;
   $("leaders").classList.toggle("hide",v!=="L");
   $("myteam").classList.toggle("hide",v!=="M");
+  document.querySelector(".main").classList.toggle("wide",v==="T");
   $("research").classList.toggle("hide",v!=="R");
   $("tablewrap").classList.toggle("hide",v!=="T");
   $("tabL").classList.toggle("on",v==="L");$("tabM").classList.toggle("on",v==="M");$("tabR").classList.toggle("on",v==="R");$("tabT").classList.toggle("on",v==="T");
@@ -1264,6 +1300,7 @@ function setView(v){
 }
 function draw(){
   $("cnt").textContent="("+cur().length+")";
+  $("prkwrap").style.display=posSel().length?"":"none";
   if(view==="L")renderLeaders();else if(view==="M")renderTeam();else if(view==="R")renderResearch();else renderTable();
 }
 document.addEventListener("click",e=>{
@@ -1290,8 +1327,9 @@ document.addEventListener("click",e=>{
   if(el)openPlayer(el.dataset.id);
 });
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeSheet();});
+layoutTable();
 $("q").oninput=draw;$("qt").onchange=draw;
-restorePos();document.querySelectorAll(".pos input").forEach(i=>{i.onchange=()=>{savePos();draw();};});
+restorePos();document.querySelectorAll(".pos input,#prk").forEach(i=>{i.onchange=()=>{savePos();draw();};});
 $("tabL").onclick=()=>setView("L");$("tabM").onclick=()=>setView("M");$("tabR").onclick=()=>setView("R");$("tabT").onclick=()=>setView("T");
 document.addEventListener("input",e=>{if(e.target.id==="cq")cmpSearch(e.target.value);});
 $("rules").textContent="__RULES__";
