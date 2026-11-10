@@ -277,6 +277,58 @@ def fill_positions(df):
     return df
 
 
+def team_key(code):
+    """One name per team, whether ESPN says 'GS' or NBA.com says 'GSW'."""
+    code = str(code)
+    return TEAM_LOOKUP.get(code.upper(), {}).get("n") or code
+
+
+def fetch_team_games():
+    """Real games played by each team, from ESPN's standings (wins + losses)."""
+    import requests
+
+    url = "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; nba-ratings)"}
+    data = requests.get(url, params={"season": ESPN_SEASON}, headers=headers,
+                        timeout=30).json()
+    games = {}
+
+    def walk(node):
+        for e in (node.get("standings") or {}).get("entries", []):
+            team = e.get("team") or {}
+            st = {x.get("name"): x.get("value") for x in e.get("stats", [])}
+            gp = st.get("gamesPlayed")
+            if gp is None and st.get("wins") is not None and st.get("losses") is not None:
+                gp = st["wins"] + st["losses"]
+            if gp is None:
+                continue
+            for name in (team.get("abbreviation"), team.get("displayName")):
+                if name:
+                    games[team_key(name)] = int(gp)
+        for child in node.get("children", []):
+            walk(child)
+
+    walk(data)
+    return games
+
+
+def apply_team_games(players, teams):
+    """Replace the 'most games any teammate played' guess with the real count."""
+    try:
+        real = fetch_team_games()
+    except Exception as e:
+        print("Warning: could not load team games from standings:", e)
+        return teams
+    guess = dict(zip(teams["TEAM_ID"], teams["GP"]))
+    out, hits = [], 0
+    for code in teams["TEAM_ID"]:
+        gp = real.get(team_key(code))
+        hits += gp is not None
+        out.append(gp if gp is not None else guess[code])
+    print(f"Team games from ESPN standings: {hits} of {len(out)} teams")
+    return pd.DataFrame({"TEAM_ID": teams["TEAM_ID"], "GP": out})
+
+
 def _page_names(page):
     """ESPN lists each stat group's names once at the top of the page."""
     top = {}
@@ -390,7 +442,8 @@ def fetch_espn():
     if not pages:
         raise ValueError("ESPN returned no players")
     players, teams = parse_espn(pages)
-    return fill_positions(players), teams
+    players = fill_positions(players)
+    return players, apply_team_games(players, teams)
 
 
 def fetch():
