@@ -90,6 +90,9 @@ TEAM_LOOKUP = {code: {"n": name, "a": extra}
                for code in (canon, *others)}
 
 
+ESPN_PHOTO = "https://a.espncdn.com/i/headshots/nba/players/full/{}.png"
+
+
 # ---------------------------------------------------------------- positions
 def to_groups(pos):
     """'PG' -> 'G', 'PF' -> 'F', 'C' -> 'C', 'G-F' -> 'GF'. Unknown -> ''."""
@@ -186,6 +189,8 @@ def compute_ratings(players, teams, qualified_only=False):
     rows = []
     for _, r in df.sort_values("OVERALL", ascending=False).iterrows():
         photo = r.get("PHOTO")
+        if photo == ESPN_PHOTO.format(r["PLAYER_ID"]):
+            photo = ""   # the page rebuilds this standard link itself
         rows.append({
             "id": str(r["PLAYER_ID"]),
             "pos": r["POS"] if isinstance(r["POS"], str) else "",
@@ -283,13 +288,13 @@ def team_key(code):
     return TEAM_LOOKUP.get(code.upper(), {}).get("n") or code
 
 
-def fetch_team_games():
+def fetch_team_games(season=None):
     """Real games played by each team, from ESPN's standings (wins + losses)."""
     import requests
 
     url = "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
     headers = {"User-Agent": "Mozilla/5.0 (compatible; nba-ratings)"}
-    data = requests.get(url, params={"season": ESPN_SEASON}, headers=headers,
+    data = requests.get(url, params={"season": season or ESPN_SEASON}, headers=headers,
                         timeout=30).json()
     games = {}
 
@@ -312,10 +317,10 @@ def fetch_team_games():
     return games
 
 
-def apply_team_games(players, teams):
+def apply_team_games(players, teams, season=None):
     """Replace the 'most games any teammate played' guess with the real count."""
     try:
-        real = fetch_team_games()
+        real = fetch_team_games(season)
     except Exception as e:
         print("Warning: could not load team games from standings:", e)
         return teams
@@ -410,7 +415,7 @@ def parse_espn(pages):
     return df.reset_index(drop=True), teams
 
 
-def fetch_espn():
+def fetch_espn(season=None):
     import time
     import requests
 
@@ -419,7 +424,7 @@ def fetch_espn():
     while page <= 40:
         params = {"region": "us", "lang": "en", "contentorigin": "espn",
                   "isqualified": "false", "page": page, "limit": 50,
-                  "season": ESPN_SEASON, "seasontype": 2,
+                  "season": season or ESPN_SEASON, "seasontype": 2,
                   "sort": "offensive.avgPoints:desc"}
         for attempt in range(3):
             try:
@@ -443,7 +448,7 @@ def fetch_espn():
         raise ValueError("ESPN returned no players")
     players, teams = parse_espn(pages)
     players = fill_positions(players)
-    return players, apply_team_games(players, teams)
+    return players, apply_team_games(players, teams, season)
 
 
 def fetch():
@@ -751,6 +756,26 @@ def pick_baseline(hist, today):
     return {"days": (today - d).days, "date": f"{d:%b} {d.day}", "p": hist[key]}
 
 
+PREV_FILE = "prev_season.json"
+
+
+def build_previous_season():
+    """Last season's final stats, rated the same way (saved after the first run)."""
+    if DATA_SOURCE != "espn":
+        return None
+    year = ESPN_SEASON - 1
+    settings = [MIN_GP_PCT, MIN_MPG, MIN_ATTEMPTS_PER_GAME, [c[0] for c in CATEGORIES], 2]
+    cached = load_json_file(PREV_FILE, None)
+    if cached and cached.get("season") == year and cached.get("settings") == settings:
+        return cached
+    players, teams = fetch_espn(year)
+    out = {"season": year, "label": f"{year - 1}-{str(year)[2:]}", "settings": settings,
+           "all": compute_ratings(players, teams),
+           "q": compute_ratings(players, teams, qualified_only=True)}
+    save_json_file(PREV_FILE, out)
+    return out
+
+
 def build_extras(rows_all, rows_q, today):
     ex = {"inj": {}, "sched": [], "form": {}, "base": None}
     cache = {}
@@ -808,6 +833,8 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 .seg button.on{background:var(--accent);color:#fff}
 .tg{display:flex;align-items:center;gap:6px;font-size:13px;color:#e6e8f5;cursor:pointer}
 .tg input{accent-color:var(--accent);width:17px;height:17px}
+.ssel select{background:rgba(255,255,255,.15);color:#fff;border:0;border-radius:10px;padding:7px 10px;font-size:14px;font-weight:600;margin-bottom:10px}
+.ssel option{color:#000}
 .pos{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
 .pos .pl{color:#c7cbe0;font-size:13px;margin-right:2px}
 .pp{position:relative;cursor:pointer}
@@ -854,8 +881,9 @@ table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%
 th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:center;white-space:nowrap}
 th{background:var(--head);position:sticky;top:0;cursor:pointer;user-select:none;z-index:2}
 .static-th th{cursor:default}
-th:first-child,td:first-child{position:sticky;left:0;text-align:left;background:var(--card);z-index:1;min-width:210px}
+th:first-child,td:first-child{position:sticky;left:0;background:var(--card);z-index:1;padding:4px 6px;border-right:1px solid var(--line)}
 th:first-child{background:var(--head);z-index:3}
+td.nmc,th:nth-child(2){text-align:left;min-width:170px}
 tbody tr{cursor:pointer}
 tbody tr:hover td{background:var(--head)}
 .pc{display:flex;align-items:center;gap:6px}
@@ -882,6 +910,8 @@ td.o{font-weight:700}
 .shov small{display:block;font-size:11px;color:var(--muted);font-weight:600}
 .addbtn{display:block;width:100%;margin:0 0 12px;padding:10px;border-radius:12px;border:1px solid var(--accent);background:none;color:var(--accent2);font-weight:700;font-size:14px;cursor:pointer}
 .addbtn:hover{background:var(--head)}
+.abr{display:flex;gap:8px;margin:0 0 12px}
+.abr .addbtn{flex:1;width:auto;margin:0;padding:7px 6px;font-size:13px}
 .br{display:grid;grid-template-columns:128px 1fr 24px 54px;gap:8px;align-items:center;padding:5px 0;font-size:14px}
 .br.avg{grid-template-columns:128px 1fr 40px}
 .bt{height:10px;background:var(--head);border-radius:6px;overflow:hidden}
@@ -926,7 +956,8 @@ td.o{font-weight:700}
 </style></head><body>
 <div class="top"><div class="top-in">
 <h1>🏀 NBA Player Ratings</h1>
-<div class="sub">Season __SEASON__ · updated __UPDATED__</div>
+<div class="sub" id="sub">Season __SEASON__ · updated __UPDATED__</div>
+<div class="ssel" id="sselwrap" style="display:none"><select id="ssel" aria-label="Season"></select></div>
 <div class="ctl">
 <input id="q" type="search" placeholder="Search a player or team">
 <div class="seg"><button id="tabL" class="on">Leaders</button><button id="tabM">My team</button><button id="tabR">Research</button><button id="tabT">Full list</button></div>
@@ -943,7 +974,10 @@ td.o{font-weight:700}
 <div class="foot"><div id="rules"></div><div id="mvnote"></div><div>Scores are 1 to 10 in each of 10 categories (10 = league leader). Overall is the sum, out of 100. MPG is shown for context only. Tap any player for their full breakdown, and tap ☆ to add them to My team.</div></div>
 <div class="ov" id="ov"><div class="sheet" id="sheet"></div></div>
 <script>
-const CATS=__CATS__, ALL=__ROWS_ALL__, QUAL=__ROWS_Q__, TEAMS=__TEAMS__;
+const CATS=__CATS__, DATA=__DATA__, TEAMS=__TEAMS__;
+let season="cur", ALL=DATA.cur.all, QUAL=DATA.cur.q;
+const isCur=()=>season==="cur";
+const ESPNP="https://a.espncdn.com/i/headshots/nba/players/full/";
 const INJ=__INJ__, SCHED=__SCHED__, FORM=__FORM__, BASE=__BASE__;
 // CATS entry: [key, label, lowerIsBetter, emoji, title]
 const $=id=>document.getElementById(id);
@@ -980,8 +1014,7 @@ const star=id=>'<button class="st'+(inTeam(id)?' on':'')+'" data-st="'+id+'" ari
 function avFail(img){const s=img.parentNode;s.classList.add("ini");s.textContent=s.dataset.ini;}
 function av(r,size){
   const ini=esc(r.name.split(" ").map(w=>w[0]).slice(0,2).join(""));
-  if(!r.photo)return '<span class="av ini" style="--s:'+size+'px">'+ini+'</span>';
-  return '<span class="av" data-ini="'+ini+'" style="--s:'+size+'px"><img loading="lazy" alt="" src="'+esc(r.photo)+'" onerror="avFail(this)"></span>';
+  return '<span class="av" data-ini="'+ini+'" style="--s:'+size+'px"><img loading="lazy" alt="" src="'+esc(r.photo||(ESPNP+r.id+".png"))+'" onerror="avFail(this)"></span>';
 }
 
 /* ---------- search (players AND teams) ---------- */
@@ -1012,9 +1045,9 @@ function searchHTML(q){
 
 /* ---------- injury badges + rank movement ---------- */
 function ibt(s){const t=String(s||"").toLowerCase();return t.includes("out")?"OUT":t.includes("day")?"DTD":t.includes("question")?"Q":t.includes("doubt")?"D":t.includes("prob")?"P":s?String(s).slice(0,4).toUpperCase():"";}
-function ib(id){const i=INJ[id];if(!i||!i.s)return "";const t=ibt(i.s);return '<span class="ib'+(t==="OUT"?" out":"")+'" title="'+esc(i.s+(i.d?": "+i.d:""))+'">'+t+'</span>';}
+function ib(id){const i=isCur()?INJ[id]:null;if(!i||!i.s)return "";const t=ibt(i.s);return '<span class="ib'+(t==="OUT"?" out":"")+'" title="'+esc(i.s+(i.d?": "+i.d:""))+'">'+t+'</span>';}
 function moves(rows,k,lower){
-  if(!BASE)return null;
+  if(!BASE||!isCur())return null;
   const idx=k==="overall"?-1:CATS.findIndex(c=>c[0]===k), both=[];
   rows.forEach(r=>{
     const b=BASE.p[r.id];if(!b)return;
@@ -1076,12 +1109,12 @@ function cmp(a,b){
   const x=val(a,key),y=val(b,key);return x>y?1:x<y?-1:0;
 }
 function trow(r){
-  return '<tr data-id="'+r.id+'"><td><span class="pc">'+star(r.id)+av(r,28)+'<span>'+esc(r.name)+'</span>'+ib(r.id)+'</span></td><td>'+esc(r.team)+'</td><td>'+esc(r.pos||"—")+'</td><td>'+r.mpg+'</td><td>'+r.gp+'</td><td class="o">'+r.overall+'</td>'+
+  return '<tr data-id="'+r.id+'"><td class="pk">'+av(r,32)+'</td><td class="nmc"><span class="pc">'+star(r.id)+'<span>'+esc(r.name)+'</span>'+ib(r.id)+'</span></td><td>'+esc(r.team)+'</td><td>'+esc(r.pos||"—")+'</td><td>'+r.mpg+'</td><td>'+r.gp+'</td><td class="o">'+r.overall+'</td>'+
     CATS.map(c=>'<td class="sc"><b style="background:'+hue(r.s[c[0]]).replace("hsl","hsla").replace(")",",.35)")+'">'+r.s[c[0]]+'</b><small>'+r.v[c[0]]+'</small></td>').join("")+'</tr>';
 }
 function renderTable(){
-  $("h").innerHTML="<tr>"+cols.map(c=>'<th data-k="'+c[0]+'">'+c[1]+(c[0]===key?(dir<0?" ▼":" ▲"):"")+"</th>").join("")+"</tr>";
-  document.querySelectorAll("#h th").forEach(t=>t.onclick=()=>{const k=t.dataset.k;if(k===key)dir=-dir;else{key=k;dir=(k==="name"||k==="team")?1:-1;}renderTable();});
+  $("h").innerHTML='<tr><th class="pk"></th>'+cols.map(c=>'<th data-k="'+c[0]+'">'+c[1]+(c[0]===key?(dir<0?" ▼":" ▲"):"")+"</th>").join("")+"</tr>";
+  document.querySelectorAll("#h th[data-k]").forEach(t=>t.onclick=()=>{const k=t.dataset.k;if(k===key)dir=-dir;else{key=k;dir=(k==="name"||k==="team")?1:-1;}renderTable();});
   const nq=norm($("q").value.trim());
   const rows=pool().filter(r=>tText(r).includes(nq)).sort((a,b)=>cmp(a,b)*dir);
   $("b").innerHTML=rows.map(trow).join("");
@@ -1098,7 +1131,7 @@ function summary(mine){
   const tot=k=>mine.reduce((s,r)=>s+(r.n[k]||0),0).toFixed(1);
   let h='<section class="card"><div class="ch"><span class="em">⭐</span>My team<span class="ct">'+n+' player'+(n===1?"":"s")+'</span></div>';
   h+='<div class="lead static"><div class="nm"><b>Average overall</b><small>Strongest: '+best+'<br>Weakest: '+worst+'</small></div><div class="big">'+avgO+'<small>/100</small></div></div>';
-  const hurt=mine.filter(r=>INJ[r.id]&&INJ[r.id].s);
+  const hurt=isCur()?mine.filter(r=>INJ[r.id]&&INJ[r.id].s):[];
   if(hurt.length)h+='<div class="cap">⚠️ Injury report: '+hurt.map(r=>esc(r.name)+' ('+ibt(INJ[r.id].s)+')').join(", ")+'</div>';
   h+='<div class="cap">Combined per-game totals</div><div class="tot">'+
     [["ppg","PTS"],["rpg","REB"],["apg","AST"],["spg","STL"],["bpg","BLK"],["tov","TO"]].map(p=>'<div><b>'+tot(p[0])+'</b><small>'+p[1]+'</small></div>').join("")+'</div>';
@@ -1119,7 +1152,7 @@ function renderTeam(){
   }else{
     if(mine.length)h+=summary(mine);
     if(mine.length){
-      h+='<div class="wrap mt"><table class="static-th"><thead><tr>'+cols.map(c=>'<th>'+c[1]+'</th>').join("")+'</tr></thead><tbody>'+mine.map(trow).join("")+'</tbody></table></div>';
+      h+='<div class="wrap mt"><table class="static-th"><thead><tr><th class="pk"></th>'+cols.map(c=>'<th>'+c[1]+'</th>').join("")+'</tr></thead><tbody>'+mine.map(trow).join("")+'</tbody></table></div>';
     }
     if(missing)h+='<p class="note">'+missing+' saved player'+(missing===1?" isn’t":"s aren’t")+' rated in this view (not qualified, or not in the data). Turn off “Qualified players only” to see them.</p>';
     h+='<p class="note">Your team is saved in this browser on this device. Ratings update every night.</p>';
@@ -1157,6 +1190,7 @@ function cmpTable(rows){
 }
 function weekCard(){
   let h='<section class="card"><div class="ch"><span class="em">📅</span>Games this week</div>';
+  if(!isCur())return h+'<div class="empty">Games this week is for the current season. Switch the season at the top of the page.</div></section>';
   if(!SCHED.length||!Object.keys(SCHED[wk].teams).length)return h+'<div class="empty">The schedule isn’t available yet. It will appear after the next update.</div></section>';
   const w=SCHED[wk];
   h+='<div class="mini">'+SCHED.map((x,i)=>'<button class="pill'+(i===wk?' on':'')+'" data-wk="'+i+'">'+(i===0?"This week":"Next week")+'</button>').join("")+'</div><div class="cap">'+esc(w.label)+'</div>';
@@ -1178,6 +1212,7 @@ function frow(x){
 }
 function formCard(){
   let h='<section class="card"><div class="ch"><span class="em">🌡️</span>Hot and cold (last 5 games)</div>';
+  if(!isCur())return h+'<div class="empty">Hot and cold is for the current season. Switch the season at the top of the page.</div></section>';
   const byId={};pool().forEach(r=>{byId[r.id]=r;});
   const list=Object.keys(FORM).filter(id=>byId[id]).map(id=>({r:byId[id],f:FORM[id]}));
   if(!list.length)return h+'<div class="empty">The hot and cold list will appear once the app has saved each player’s last 5 games. It builds up over the first update or two.</div></section>';
@@ -1202,13 +1237,12 @@ function openPlayer(id){
   const r=cur().find(x=>x.id===id)||ALL.find(x=>x.id===id);
   if(!r)return;
   let h='<button class="x" id="cl" aria-label="Close">×</button>';
-  const b=BASE&&BASE.p[r.id], bo=b?($("qt").checked?b[1]:b[0]):null;
+  const b=isCur()&&BASE&&BASE.p[r.id], bo=b?($("qt").checked?b[1]:b[0]):null;
   const dl=(bo===null||bo===undefined||bo===r.overall)?"":' · <span class="mv '+(r.overall>bo?"up":"dn")+'" style="margin:0">'+(r.overall>bo?"▲ +":"▼ −")+Math.abs(r.overall-bo)+' vs '+BASE.days+'d</span>';
-  const ij=INJ[r.id];
+  const ij=isCur()?INJ[r.id]:null;
   h+='<div class="shh">'+av(r,72)+'<div><div class="shn">'+esc(r.name)+'</div><div class="shs">'+esc(tName(r))+(r.pos?" · "+esc(r.pos):"")+' · '+r.mpg+' MPG · '+r.gp+' GP</div></div><div class="shov">'+r.overall+'<small>of 100'+dl+'</small></div></div>';
   if(ij&&ij.s)h+='<div class="inj">'+ib(r.id)+esc(ij.s+(ij.d?": "+ij.d:""))+'</div>';
-  h+='<button class="addbtn" data-st="'+r.id+'">'+(inTeam(r.id)?"★ On my team · tap to remove":"☆ Add to my team")+'</button>';
-  h+='<button class="addbtn" data-cmpopen="'+r.id+'">⚖️ Compare with other players</button>';
+  h+='<div class="abr"><button class="addbtn" data-st="'+r.id+'">'+(inTeam(r.id)?"★ On my team":"☆ Add to my team")+'</button><button class="addbtn" data-cmpopen="'+r.id+'">⚖️ Compare players</button></div>';
   CATS.forEach(c=>{const sc=r.s[c[0]];
     h+='<div class="br"><span>'+c[3]+' '+c[1]+'</span><span class="bt"><i style="width:'+(sc*10)+'%;background:'+hue(sc)+'"></i></span><span class="bs">'+sc+'</span><span class="bv">'+r.v[c[0]]+'</span></div>';});
   h+='<p class="note">'+($("qt").checked?"Ranked among qualified players only.":"Ranked against all players.")+'</p>';
@@ -1261,13 +1295,30 @@ restorePos();document.querySelectorAll(".pos input").forEach(i=>{i.onchange=()=>
 $("tabL").onclick=()=>setView("L");$("tabM").onclick=()=>setView("M");$("tabR").onclick=()=>setView("R");$("tabT").onclick=()=>setView("T");
 document.addEventListener("input",e=>{if(e.target.id==="cq")cmpSearch(e.target.value);});
 $("rules").textContent="__RULES__";
-$("mvnote").textContent=BASE?"Arrows show rank change vs "+BASE.days+" day"+(BASE.days===1?"":"s")+" ago ("+BASE.date+"). Badges show the ESPN injury report.":"Rank-change arrows appear once the app has saved a day or two of history. Badges show the ESPN injury report.";
+const SUBCUR=$("sub").textContent;
+function updateNote(){
+  $("mvnote").textContent=!isCur()?"Showing final "+DATA.prev.label+" stats, rated the same way. Rank-change arrows, injuries, the schedule and hot/cold are current-season only.":BASE?"Arrows show rank change vs "+BASE.days+" day"+(BASE.days===1?"":"s")+" ago ("+BASE.date+"). Badges show the ESPN injury report.":"Rank-change arrows appear once the app has saved a day or two of history. Badges show the ESPN injury report.";
+}
+function setSeason(k){
+  season=k;ALL=DATA[k].all;QUAL=DATA[k].q;
+  $("sub").textContent=k==="cur"?SUBCUR:"Season "+DATA.prev.label+" · final stats";
+  updateNote();draw();
+}
+if(DATA.prev){
+  $("ssel").innerHTML='<option value="cur">'+DATA.cur.label+' season (current)</option><option value="prev">'+DATA.prev.label+' season (last year)</option>';
+  $("sselwrap").style.display="";
+  $("ssel").onchange=()=>setSeason($("ssel").value);
+}
+updateNote();
 draw();
 </script></body></html>"""
 
 
-def write_html(rows_all, rows_q, path="index.html", extras=None):
+def write_html(rows_all, rows_q, path="index.html", extras=None, prev=None):
     ex = {"inj": {}, "sched": [], "form": {}, "base": None, **(extras or {})}
+    data = {"cur": {"label": SEASON, "all": rows_all, "q": rows_q}, "prev": None}
+    if prev:
+        data["prev"] = {"label": prev["label"], "all": prev["all"], "q": prev["q"]}
     cats = [[c[0], c[1], c[3], *CATEGORY_INFO[c[0]]] for c in CATEGORIES]
     a = MIN_ATTEMPTS_PER_GAME
     rules = (f"Qualified = at least {MIN_GP_PCT:.0%} of team games and {MIN_MPG:g} MPG. "
@@ -1282,8 +1333,7 @@ def write_html(rows_all, rows_q, path="index.html", extras=None):
                 .replace("__FORM__", json.dumps(ex["form"]))
                 .replace("__BASE__", json.dumps(ex["base"]))
                 .replace("__UPDATED__", datetime.now(ZoneInfo("America/Toronto")).strftime("%b %d, %I:%M %p ET"))
-                .replace("__ROWS_ALL__", json.dumps(rows_all))
-                .replace("__ROWS_Q__", json.dumps(rows_q)))
+                .replace("__DATA__", json.dumps(data)))
     Path(path).write_text(html, encoding="utf-8")
     print(f"Wrote {path} ({len(rows_all)} players, {len(rows_q)} qualified)")
 
@@ -1300,4 +1350,11 @@ if __name__ == "__main__":
         counts[r["g"] or "none"] = counts.get(r["g"] or "none", 0) + 1
     print("Positions found:", counts)
     today = datetime.now(ZoneInfo("America/Toronto")).date()
-    write_html(rows_all, rows_q, extras=build_extras(rows_all, rows_q, today))
+    prev = None
+    try:
+        prev = build_previous_season()
+        if prev:
+            print(f"Last season ({prev['label']}): {len(prev['all'])} players rated")
+    except Exception as e:
+        print("Warning: could not load last season (the season menu will be hidden):", e)
+    write_html(rows_all, rows_q, extras=build_extras(rows_all, rows_q, today), prev=prev)
