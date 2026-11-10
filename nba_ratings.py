@@ -502,25 +502,93 @@ def save_json_file(path, obj):
     Path(path).write_text(json.dumps(obj, separators=(",", ":")), encoding="utf-8")
 
 
-def fetch_injuries():
-    """{player id: {"s": status, "d": detail}} from ESPN's injury report."""
-    data = _get_json(ESPN_SITE + "/injuries")
-    out = {}
-    for team in data.get("injuries", []):
-        for inj in team.get("injuries", []):
-            a = inj.get("athlete") or {}
-            pid = a.get("id")
-            if not pid:
-                m = re.search(r"/athletes/(\d+)", str(a.get("$ref") or ""))
-                pid = m.group(1) if m else None
-            if not pid:
-                continue
-            status = inj.get("status") or (inj.get("type") or {}).get("description") or ""
-            detail = inj.get("shortComment") or ""
-            d = inj.get("details")
+def _athlete_id(a):
+    if not isinstance(a, dict):
+        return None
+    if a.get("id"):
+        return str(a["id"])
+    parts = [str(a.get("$ref") or ""), str(a.get("uid") or ""), str(a.get("guid") or "")]
+    parts += [str(link.get("href") or "") for link in a.get("links", []) if isinstance(link, dict)]
+    blob = " ".join(parts)
+    m = (re.search(r"/athletes/(\d+)", blob) or re.search(r"a:(\d+)", blob)
+         or re.search(r"/id/(\d+)", blob))
+    return m.group(1) if m else None
+
+
+def _athlete_name(a):
+    if not isinstance(a, dict):
+        return str(a or "")
+    full = " ".join(x for x in (a.get("firstName"), a.get("lastName")) if x)
+    return a.get("displayName") or a.get("fullName") or full or a.get("shortName") or ""
+
+
+def _text(v):
+    if isinstance(v, dict):
+        return str(v.get("name") or v.get("description") or v.get("detail") or "")
+    return str(v) if v else ""
+
+
+def _collect_injuries(node, out):
+    """Find every injury entry in ESPN's JSON, however deeply it is nested."""
+    if isinstance(node, dict):
+        a = node.get("athlete")
+        if isinstance(a, dict):
+            detail = _text(node.get("shortComment"))
+            d = node.get("details")
             if not detail and isinstance(d, dict):
                 detail = " ".join(x for x in (d.get("type"), d.get("detail")) if x)
-            out[str(pid)] = {"s": str(status), "d": str(detail)[:160]}
+            status = _text(node.get("status")) or _text(node.get("type"))
+            if not status and detail:
+                status = "Injured"
+            out.append({"id": _athlete_id(a), "name": _athlete_name(a),
+                        "s": status, "d": detail[:160]})
+        for v in node.values():
+            _collect_injuries(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _collect_injuries(v, out)
+
+
+def fetch_injuries():
+    """Injury entries from ESPN: league-wide report, else team by team."""
+    import time
+
+    recs = []
+    data = _get_json(ESPN_SITE + "/injuries")
+    _collect_injuries(data, recs)
+    if not recs:  # backup: ask each team for its own report
+        teams = _get_json(ESPN_SITE + "/teams")
+        for t in teams["sports"][0]["leagues"][0]["teams"]:
+            _collect_injuries(_get_json(f"{ESPN_SITE}/teams/{t['team']['id']}/injuries"), recs)
+            time.sleep(0.2)
+    if not recs:
+        raise ValueError("no injury entries found in ESPN's data. What it sent: "
+                         + json.dumps(data)[:300])
+    return recs
+
+
+def _norm_name(s):
+    import unicodedata
+
+    t = unicodedata.normalize("NFD", str(s)).encode("ascii", "ignore").decode().lower()
+    t = re.sub(r"[^a-z ]", "", t)
+    return " ".join(w for w in t.split() if w not in ("jr", "sr", "ii", "iii", "iv"))
+
+
+def match_injuries(recs, rows):
+    """{app player id: {"s": status, "d": detail}}, matched by id, else by name."""
+    ids = {r["id"] for r in rows}
+    by_name = {}
+    for r in rows:
+        by_name.setdefault(_norm_name(r["name"]), []).append(r["id"])
+    out = {}
+    for rec in recs:
+        pid = rec["id"] if rec["id"] in ids else None
+        if pid is None:
+            cands = by_name.get(_norm_name(rec["name"]), [])
+            pid = cands[0] if len(cands) == 1 else None
+        if pid and rec["s"]:
+            out[pid] = {"s": rec["s"], "d": rec["d"]}
     return out
 
 
@@ -687,8 +755,11 @@ def build_extras(rows_all, rows_q, today):
     ex = {"inj": {}, "sched": [], "form": {}, "base": None}
     cache = {}
     try:
-        ex["inj"] = fetch_injuries()
-        print(f"Injuries found: {len(ex['inj'])}")
+        recs = fetch_injuries()
+        ex["inj"] = match_injuries(recs, rows_all)
+        print(f"Injuries: {len(recs)} in ESPN's report, {len(ex['inj'])} matched to players in the app")
+        if recs and not ex["inj"]:
+            print("  Sample from the report (ids/names did not match):", recs[:3])
     except Exception as e:
         print("Warning: could not load injuries:", e)
     try:
