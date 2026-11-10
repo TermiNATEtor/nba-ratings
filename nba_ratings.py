@@ -12,7 +12,7 @@ Then open:      index.html
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -462,6 +462,258 @@ def fetch_nba():
     return players, teams
 
 
+# ---------------------------------------------------------------- extras
+# Injuries, this/next week's schedule, last-5-games form, and week-ago history.
+# Each piece is optional: if one fails, the rest of the page still works.
+ESPN_SITE = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
+HISTORY_FILE = "history.json"   # nightly ratings snapshots (for rank-change arrows)
+GAMES_FILE = "games.json"       # saved box scores (for last-5-games form)
+HISTORY_KEEP_DAYS = 21
+GAMES_KEEP_DAYS = 35
+BACKFILL_DAYS = 30
+FORM_GAMES = 5
+FORM_KEYS = ["ppg", "rpg", "apg", "spg", "bpg", "tov"]
+_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; nba-ratings)"}
+
+
+def _get_json(url, params=None, retries=2):
+    import time
+    import requests
+
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, params=params, headers=_HEADERS, timeout=30)
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            if attempt == retries:
+                raise
+            time.sleep(2)
+
+
+def load_json_file(path, default):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def save_json_file(path, obj):
+    Path(path).write_text(json.dumps(obj, separators=(",", ":")), encoding="utf-8")
+
+
+def fetch_injuries():
+    """{player id: {"s": status, "d": detail}} from ESPN's injury report."""
+    data = _get_json(ESPN_SITE + "/injuries")
+    out = {}
+    for team in data.get("injuries", []):
+        for inj in team.get("injuries", []):
+            a = inj.get("athlete") or {}
+            pid = a.get("id")
+            if not pid:
+                m = re.search(r"/athletes/(\d+)", str(a.get("$ref") or ""))
+                pid = m.group(1) if m else None
+            if not pid:
+                continue
+            status = inj.get("status") or (inj.get("type") or {}).get("description") or ""
+            detail = inj.get("shortComment") or ""
+            d = inj.get("details")
+            if not detail and isinstance(d, dict):
+                detail = " ".join(x for x in (d.get("type"), d.get("detail")) if x)
+            out[str(pid)] = {"s": str(status), "d": str(detail)[:160]}
+    return out
+
+
+def fetch_events(day, cache):
+    """Games on one day (cached for this run): teams, finished?, season type."""
+    import time
+
+    key = day.strftime("%Y%m%d")
+    if key not in cache:
+        data = _get_json(ESPN_SITE + "/scoreboard", {"dates": key, "limit": 100})
+        events = []
+        for e in data.get("events", []):
+            comp = (e.get("competitions") or [{}])[0]
+            teams = []
+            for c in comp.get("competitors", []):
+                t = c.get("team") or {}
+                teams.append(team_key(t.get("abbreviation") or t.get("displayName") or ""))
+            status = (e.get("status") or {}).get("type") or {}
+            events.append({"id": str(e.get("id")), "teams": teams,
+                           "done": bool(status.get("completed")),
+                           "type": (e.get("season") or {}).get("type")})
+        cache[key] = events
+        time.sleep(0.2)
+    return cache[key]
+
+
+def build_schedule(today, cache):
+    """Games per team for this week and next (Monday to Sunday)."""
+    monday = today - timedelta(days=today.weekday())
+    weeks = []
+    for w in range(2):
+        start = monday + timedelta(days=7 * w)
+        end = start + timedelta(days=6)
+        teams = {}
+        for i in range(7):
+            for ev in fetch_events(start + timedelta(days=i), cache):
+                if ev["type"] not in (None, 2):
+                    continue
+                for t in ev["teams"]:
+                    if t:
+                        teams.setdefault(t, [0] * 7)[i] = 2 if ev["done"] else 1
+        label = (f"{'This' if w == 0 else 'Next'} week: {start:%b} {start.day} to "
+                 f"{end:%b} {end.day} (Mon to Sun)")
+        weeks.append({"label": label, "teams": teams})
+    return weeks
+
+
+def fetch_boxscore(event_id):
+    """{player id: [min, pts, reb, ast, stl, blk, tov]} for one finished game."""
+    data = _get_json(ESPN_SITE + "/summary", {"event": event_id})
+    lines = {}
+    for team in (data.get("boxscore") or {}).get("players", []):
+        for block in team.get("statistics", []):
+            labels = [str(x).upper() for x in (block.get("labels") or block.get("names") or [])]
+            if "TOV" in labels and "TO" not in labels:
+                labels[labels.index("TOV")] = "TO"
+            idx = {k: (labels.index(k) if k in labels else None)
+                   for k in ("MIN", "PTS", "REB", "AST", "STL", "BLK", "TO")}
+            if idx["MIN"] is None or idx["PTS"] is None:
+                raise ValueError(f"unexpected box score columns: {labels}")
+            for a in block.get("athletes", []):
+                stats = a.get("stats") or []
+                pid = (a.get("athlete") or {}).get("id")
+                if not pid or not stats or a.get("didNotPlay"):
+                    continue
+
+                def num(k):
+                    i = idx[k]
+                    if i is None or i >= len(stats):
+                        return 0.0
+                    m = re.match(r"-?\d+(\.\d+)?", str(stats[i]))
+                    return float(m.group()) if m else 0.0
+
+                if num("MIN") > 0:
+                    lines[str(pid)] = [num(k) for k in ("MIN", "PTS", "REB", "AST", "STL", "BLK", "TO")]
+    return lines
+
+
+def update_games(today, cache):
+    """Save box scores of newly finished games (only fetches what's new)."""
+    import time
+
+    games = load_json_file(GAMES_FILE, {}).get("games", {})
+    start = today - timedelta(days=BACKFILL_DAYS)
+    if games:
+        start = max(start, date.fromisoformat(max(g["d"] for g in games.values())) - timedelta(days=1))
+    new, first_error, day = 0, None, start
+    while day <= today:
+        for ev in fetch_events(day, cache):
+            if ev["type"] not in (None, 2) or not ev["done"] or ev["id"] in games:
+                continue
+            try:
+                lines = fetch_boxscore(ev["id"])
+            except Exception as e:
+                first_error = first_error or e
+                continue
+            if lines:
+                games[ev["id"]] = {"d": day.isoformat(), "p": lines}
+                new += 1
+            time.sleep(0.25)
+        day += timedelta(days=1)
+    cutoff = (today - timedelta(days=GAMES_KEEP_DAYS)).isoformat()
+    games = {k: v for k, v in games.items() if v["d"] >= cutoff}
+    save_json_file(GAMES_FILE, {"games": games})
+    print(f"Box scores saved: {len(games)} games ({new} new)")
+    if first_error:
+        print("Warning: some box scores could not be read:", first_error)
+    return games
+
+
+def compute_form(rows_q, games):
+    """Last-5-games production vs season, scored with the app's 1-10 tiers."""
+    by_player = {}
+    for g in sorted(games.values(), key=lambda g: g["d"]):
+        for pid, line in g["p"].items():
+            by_player.setdefault(pid, []).append(line)
+    ids, last5, season = [], [], []
+    for r in rows_q:
+        recent = by_player.get(r["id"], [])[-FORM_GAMES:]
+        sv = [r["n"][k] for k in FORM_KEYS]
+        if len(recent) < FORM_GAMES or any(v is None for v in sv):
+            continue
+        ids.append(r["id"])
+        last5.append([round(sum(x[i] for x in recent) / len(recent), 1) for i in range(1, 7)])
+        season.append(sv)
+    if len(ids) < 10:
+        return {}
+    dl = pd.DataFrame(last5, columns=FORM_KEYS)
+    ds = pd.DataFrame(season, columns=FORM_KEYS)
+    idx_l = sum(rate_column(dl[k], k == "tov") for k in FORM_KEYS)
+    idx_s = sum(rate_column(ds[k], k == "tov") for k in FORM_KEYS)
+    return {pid: {"a": last5[i], "l": int(idx_l[i]), "s": int(idx_s[i]),
+                  "d": int(idx_l[i] - idx_s[i])} for i, pid in enumerate(ids)}
+
+
+def make_snapshot(rows_all, rows_q):
+    q = {r["id"]: r["overall"] for r in rows_q}
+    return {r["id"]: [r["overall"], q.get(r["id"])] + [r["n"][c[0]] for c in CATEGORIES]
+            for r in rows_all}
+
+
+def update_history(snapshot, today):
+    hist = load_json_file(HISTORY_FILE, {})
+    hist[today.isoformat()] = snapshot
+    cutoff = (today - timedelta(days=HISTORY_KEEP_DAYS)).isoformat()
+    hist = {k: v for k, v in hist.items() if k >= cutoff}
+    save_json_file(HISTORY_FILE, hist)
+    return hist
+
+
+def pick_baseline(hist, today):
+    """The saved snapshot closest to 7 days ago (or the oldest we have)."""
+    older = sorted(k for k in hist if k < today.isoformat())
+    if not older:
+        return None
+    target = (today - timedelta(days=7)).isoformat()
+    ok = [k for k in older if k <= target]
+    key = ok[-1] if ok else older[0]
+    d = date.fromisoformat(key)
+    return {"days": (today - d).days, "date": f"{d:%b} {d.day}", "p": hist[key]}
+
+
+def build_extras(rows_all, rows_q, today):
+    ex = {"inj": {}, "sched": [], "form": {}, "base": None}
+    cache = {}
+    try:
+        ex["inj"] = fetch_injuries()
+        print(f"Injuries found: {len(ex['inj'])}")
+    except Exception as e:
+        print("Warning: could not load injuries:", e)
+    try:
+        ex["sched"] = build_schedule(today, cache)
+        print("Schedule: teams playing this week:", len(ex["sched"][0]["teams"]),
+              "| next week:", len(ex["sched"][1]["teams"]))
+    except Exception as e:
+        print("Warning: could not load the schedule:", e)
+    try:
+        games = update_games(today, cache)
+        ex["form"] = compute_form(rows_q, games)
+        print(f"Hot/cold form calculated for {len(ex['form'])} players")
+    except Exception as e:
+        print("Warning: could not build hot/cold form:", e)
+    try:
+        if rows_all:
+            hist = update_history(make_snapshot(rows_all, rows_q), today)
+            ex["base"] = pick_baseline(hist, today)
+            print("History:", (f"comparing with {ex['base']['days']} day(s) ago"
+                               if ex["base"] else "first snapshot saved, arrows start tomorrow"))
+    except Exception as e:
+        print("Warning: could not save history:", e)
+    return ex
+
+
 # ---------------------------------------------------------------- output
 HTML = r"""<!doctype html>
 <html lang="en"><head>
@@ -481,7 +733,7 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 .ctl input[type=search]{flex:1;min-width:170px;max-width:340px;padding:9px 12px;border-radius:10px;border:0;background:rgba(255,255,255,.15);color:#fff;font-size:16px;outline:none}
 .ctl input::placeholder{color:#c7cbe0}
 .seg{display:flex;gap:4px;background:rgba(255,255,255,.12);padding:3px;border-radius:12px}
-.seg button{border:0;background:none;color:#dfe2f3;padding:7px 11px;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer}
+.seg button{border:0;background:none;color:#dfe2f3;padding:7px 9px;border-radius:9px;font-size:13.5px;font-weight:600;cursor:pointer}
 .seg button.on{background:var(--accent);color:#fff}
 .tg{display:flex;align-items:center;gap:6px;font-size:13px;color:#e6e8f5;cursor:pointer}
 .tg input{accent-color:var(--accent);width:17px;height:17px}
@@ -566,13 +818,47 @@ td.o{font-weight:700}
 .bs{font-weight:800;text-align:right}
 .bv{color:var(--muted);text-align:right;font-size:13px}
 .note{color:var(--muted);font-size:12px;margin:12px 0 0}
+.ib{display:inline-block;font-size:10px;font-weight:800;padding:1px 5px;border-radius:6px;margin-right:5px;vertical-align:1px;color:#fff;background:#d97706;letter-spacing:.3px}
+.ib.out{background:#dc2626}
+.mv{font-size:11px;font-weight:700;margin-left:6px;white-space:nowrap}
+.mv.up{color:#16a34a}.mv.dn{color:#dc2626}
+.big .mv{font-size:13px}
+.rs{display:grid;gap:12px}
+.cin{padding:6px 14px 8px}
+.cin input{width:100%;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font-size:16px;outline:none}
+#cres .row{padding:6px 4px}
+.cg{display:grid;gap:6px 8px;padding:6px 14px 14px;align-items:center}
+.cc{text-align:center;position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:13px}
+.cc b{line-height:1.15}
+.cc small{color:var(--muted);font-size:11px}
+.rmv{position:absolute;z-index:3;top:-2px;right:0;border:0;background:var(--head);color:var(--fg);width:22px;height:22px;border-radius:50%;cursor:pointer;font-size:14px;line-height:1}
+.cl{font-size:13px;color:var(--muted)}
+.cv{text-align:center;padding:4px 2px;border-radius:8px;font-size:13px}
+.cv.w{background:rgba(34,197,94,.18);font-weight:700}
+.cv .bt{display:block;margin:0 auto 3px;max-width:80px}
+.cv small{color:var(--muted)}
+.pill{border:1px solid var(--line);background:none;color:var(--fg);padding:5px 12px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer}
+.pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.mini{display:flex;gap:6px;padding:4px 14px}
+.gh{padding:8px 14px 2px;font-weight:700;font-size:13px;color:var(--accent2)}
+.tr2{display:flex;align-items:center;gap:10px;padding:4px 14px}
+.tr2 .tn{flex:1;font-size:14px}
+.gc{width:18px;text-align:right}
+.dots{display:flex;gap:4px}
+.dl span{width:11px;text-align:center;font-size:9px;color:var(--muted)}
+.dot{width:11px;height:11px;border-radius:50%;border:2px solid var(--line)}
+.dot.u{background:var(--accent);border-color:var(--accent)}
+.dot.d{background:var(--muted);border-color:var(--muted)}
+.fl{display:block;color:var(--muted);font-size:12px}
+.val.up{color:#16a34a}.val.dn{color:#dc2626}
+.inj{margin:-4px 0 10px;font-size:13px;color:var(--muted)}
 </style></head><body>
 <div class="top"><div class="top-in">
 <h1>🏀 NBA Player Ratings</h1>
 <div class="sub">Season __SEASON__ · updated __UPDATED__</div>
 <div class="ctl">
 <input id="q" type="search" placeholder="Search a player or team">
-<div class="seg"><button id="tabL" class="on">Leaders</button><button id="tabM">My team</button><button id="tabT">Full list</button></div>
+<div class="seg"><button id="tabL" class="on">Leaders</button><button id="tabM">My team</button><button id="tabR">Research</button><button id="tabT">Full list</button></div>
 <label class="tg"><input id="qt" type="checkbox" checked> Qualified players only <span id="cnt"></span></label>
 </div>
 <div class="pos"><span class="pl">Position</span><label class="pp"><input type="checkbox" value="G"><span>Guard (G)</span></label><label class="pp"><input type="checkbox" value="F"><span>Forward (F)</span></label><label class="pp"><input type="checkbox" value="C"><span>Center (C)</span></label></div>
@@ -580,12 +866,14 @@ td.o{font-weight:700}
 <div class="main">
 <div id="leaders"></div>
 <div id="myteam" class="hide"></div>
+<div id="research" class="hide"></div>
 <div id="tablewrap" class="wrap hide"><table><thead id="h"></thead><tbody id="b"></tbody></table></div>
 </div>
-<div class="foot"><div id="rules"></div><div>Scores are 1 to 10 in each of 10 categories (10 = league leader). Overall is the sum, out of 100. MPG is shown for context only. Tap any player for their full breakdown, and tap ☆ to add them to My team.</div></div>
+<div class="foot"><div id="rules"></div><div id="mvnote"></div><div>Scores are 1 to 10 in each of 10 categories (10 = league leader). Overall is the sum, out of 100. MPG is shown for context only. Tap any player for their full breakdown, and tap ☆ to add them to My team.</div></div>
 <div class="ov" id="ov"><div class="sheet" id="sheet"></div></div>
 <script>
 const CATS=__CATS__, ALL=__ROWS_ALL__, QUAL=__ROWS_Q__, TEAMS=__TEAMS__;
+const INJ=__INJ__, SCHED=__SCHED__, FORM=__FORM__, BASE=__BASE__;
 // CATS entry: [key, label, lowerIsBetter, emoji, title]
 const $=id=>document.getElementById(id);
 let view="L", key="overall", dir=-1;
@@ -627,7 +915,7 @@ function av(r,size){
 
 /* ---------- search (players AND teams) ---------- */
 function prow(r){
-  return '<div class="row" data-id="'+r.id+'">'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+sub(r)+'</small></span><span class="val">'+r.overall+'<small>/100</small></span>'+star(r.id)+'</div>';
+  return '<div class="row" data-id="'+r.id+'">'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+ib(r.id)+sub(r)+'</small></span><span class="val">'+r.overall+'<small>/100</small></span>'+star(r.id)+'</div>';
 }
 function searchHTML(q){
   const rows=pool(), nq=norm(q.trim());
@@ -651,6 +939,27 @@ function searchHTML(q){
   return '<div class="stack">'+h+'</div>';
 }
 
+/* ---------- injury badges + rank movement ---------- */
+function ibt(s){const t=String(s||"").toLowerCase();return t.includes("out")?"OUT":t.includes("day")?"DTD":t.includes("question")?"Q":t.includes("doubt")?"D":t.includes("prob")?"P":s?String(s).slice(0,4).toUpperCase():"";}
+function ib(id){const i=INJ[id];if(!i||!i.s)return "";const t=ibt(i.s);return '<span class="ib'+(t==="OUT"?" out":"")+'" title="'+esc(i.s+(i.d?": "+i.d:""))+'">'+t+'</span>';}
+function moves(rows,k,lower){
+  if(!BASE)return null;
+  const idx=k==="overall"?-1:CATS.findIndex(c=>c[0]===k), both=[];
+  rows.forEach(r=>{
+    const b=BASE.p[r.id];if(!b)return;
+    const cv=k==="overall"?r.overall:r.n[k], bv=k==="overall"?($("qt").checked?b[1]:b[0]):b[2+idx];
+    if(cv===null||cv===undefined||bv===null||bv===undefined)return;
+    both.push({id:r.id,c:cv,b:bv});
+  });
+  const better=(x,y)=>lower?x<y:x>y, out={};
+  both.forEach(p=>{let cr=1,br=1;both.forEach(o=>{if(better(o.c,p.c))cr++;if(better(o.b,p.b))br++;});out[p.id]=br-cr;});
+  return out;
+}
+function mvh(mv,id){
+  const d=mv&&mv[id];if(!d)return "";
+  return '<span class="mv '+(d>0?"up":"dn")+'" title="Rank change vs '+BASE.days+' day'+(BASE.days===1?"":"s")+' ago">'+(d>0?"▲":"▼")+Math.abs(d)+'</span>';
+}
+
 /* ---------- Leaders (front page) ---------- */
 function topList(rows,k,lower){
   return rows.filter(r=>r.n[k]!==null).sort((a,b)=>{
@@ -659,13 +968,13 @@ function topList(rows,k,lower){
     return b.overall-a.overall;
   }).slice(0,10);
 }
-function card(em,title,list,val,k,cls){
+function card(em,title,list,val,k,cls,mv){
   if(!list.length)return "";
   const f=list[0];
   let h='<section class="card '+(cls||"")+'"><div class="ch"><span class="em">'+em+'</span>'+title+posChip()+'</div>';
-  h+='<div class="lead" data-id="'+f.id+'">'+av(f,72)+'<div class="nm"><b>'+esc(f.name)+'</b><small>'+sub(f)+' · '+f.mpg+' MPG</small></div><div class="big">'+val(f)+'</div></div>';
+  h+='<div class="lead" data-id="'+f.id+'">'+av(f,72)+'<div class="nm"><b>'+esc(f.name)+'</b><small>'+ib(f.id)+sub(f)+' · '+f.mpg+' MPG</small></div><div class="big">'+val(f)+mvh(mv,f.id)+'</div></div>';
   list.slice(1).forEach((r,i)=>{
-    h+='<div class="row" data-id="'+r.id+'"><span class="rk">'+(i+2)+'</span>'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+sub(r)+'</small></span><span class="val">'+val(r)+'</span></div>';
+    h+='<div class="row" data-id="'+r.id+'"><span class="rk">'+(i+2)+'</span>'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+ib(r.id)+sub(r)+'</small></span><span class="val">'+val(r)+mvh(mv,r.id)+'</span></div>';
   });
   return h+'<button class="cf" data-k="'+k+'">Full ranking →</button></section>';
 }
@@ -676,8 +985,8 @@ function renderLeaders(){
   else if(q){h=searchHTML(q);}
   else{
     const overall=[...rows].sort((a,b)=>b.overall-a.overall).slice(0,10);
-    h='<div class="grid">'+card("👑","Overall rating",overall,r=>r.overall+'<small>/100</small>',"overall","first");
-    CATS.forEach(c=>{h+=card(c[3],c[4],topList(rows,c[0],c[2]),r=>r.v[c[0]],c[0]);});
+    h='<div class="grid">'+card("👑","Overall rating",overall,r=>r.overall+'<small>/100</small>',"overall","first",moves(rows,"overall",false));
+    CATS.forEach(c=>{h+=card(c[3],c[4],topList(rows,c[0],c[2]),r=>r.v[c[0]],c[0],"",moves(rows,c[0],c[2]));});
     h+='</div>';
   }
   $("leaders").innerHTML=h;
@@ -696,7 +1005,7 @@ function cmp(a,b){
   const x=val(a,key),y=val(b,key);return x>y?1:x<y?-1:0;
 }
 function trow(r){
-  return '<tr data-id="'+r.id+'"><td><span class="pc">'+star(r.id)+av(r,28)+'<span>'+esc(r.name)+'</span></span></td><td>'+esc(r.team)+'</td><td>'+esc(r.pos||"—")+'</td><td>'+r.mpg+'</td><td>'+r.gp+'</td><td class="o">'+r.overall+'</td>'+
+  return '<tr data-id="'+r.id+'"><td><span class="pc">'+star(r.id)+av(r,28)+'<span>'+esc(r.name)+'</span>'+ib(r.id)+'</span></td><td>'+esc(r.team)+'</td><td>'+esc(r.pos||"—")+'</td><td>'+r.mpg+'</td><td>'+r.gp+'</td><td class="o">'+r.overall+'</td>'+
     CATS.map(c=>'<td class="sc"><b style="background:'+hue(r.s[c[0]]).replace("hsl","hsla").replace(")",",.35)")+'">'+r.s[c[0]]+'</b><small>'+r.v[c[0]]+'</small></td>').join("")+'</tr>';
 }
 function renderTable(){
@@ -718,6 +1027,8 @@ function summary(mine){
   const tot=k=>mine.reduce((s,r)=>s+(r.n[k]||0),0).toFixed(1);
   let h='<section class="card"><div class="ch"><span class="em">⭐</span>My team<span class="ct">'+n+' player'+(n===1?"":"s")+'</span></div>';
   h+='<div class="lead static"><div class="nm"><b>Average overall</b><small>Strongest: '+best+'<br>Weakest: '+worst+'</small></div><div class="big">'+avgO+'<small>/100</small></div></div>';
+  const hurt=mine.filter(r=>INJ[r.id]&&INJ[r.id].s);
+  if(hurt.length)h+='<div class="cap">⚠️ Injury report: '+hurt.map(r=>esc(r.name)+' ('+ibt(INJ[r.id].s)+')').join(", ")+'</div>';
   h+='<div class="cap">Combined per-game totals</div><div class="tot">'+
     [["ppg","PTS"],["rpg","REB"],["apg","AST"],["spg","STL"],["bpg","BLK"],["tov","TO"]].map(p=>'<div><b>'+tot(p[0])+'</b><small>'+p[1]+'</small></div>').join("")+'</div>';
   h+='<div class="cap">Average category score (1 to 10)</div><div class="prof">'+
@@ -745,13 +1056,88 @@ function renderTeam(){
   $("myteam").innerHTML=h;
 }
 
+/* ---------- Research tab: compare, games this week, hot and cold ---------- */
+let cmpIds=[], wk=0;
+const findRow=id=>cur().find(r=>r.id===id)||ALL.find(r=>r.id===id);
+function addCmp(id){if(cmpIds.includes(id))return;if(cmpIds.length>=3)cmpIds.shift();cmpIds.push(id);}
+function cmpSearch(v){
+  const box=$("cres"),nq=norm(v.trim());
+  if(!box)return;
+  if(!nq){box.innerHTML="";return;}
+  const m=cur().filter(r=>tText(r).includes(nq)).sort((a,b)=>b.overall-a.overall).slice(0,6);
+  box.innerHTML=m.length?m.map(r=>'<div class="row" data-cmp="'+r.id+'">'+av(r,32)+'<span class="nm">'+esc(r.name)+'<small>'+ib(r.id)+sub(r)+'</small></span><span class="val">'+r.overall+'<small>/100</small></span></div>').join(""):'<div class="empty">No matches</div>';
+}
+function cmpTable(rows){
+  const n=rows.length, maxO=Math.max(...rows.map(r=>r.overall));
+  const best=c=>{const v=rows.filter(r=>r.n[c[0]]!==null).map(r=>r.n[c[0]]);return v.length?(c[2]?Math.min(...v):Math.max(...v)):null;};
+  let h='<div class="cg" style="grid-template-columns:92px repeat('+n+',1fr)"><div></div>';
+  rows.forEach(r=>{h+='<div class="cc"><button class="rmv" data-rm="'+r.id+'" aria-label="Remove">×</button>'+av(r,56)+'<b>'+esc(r.name)+'</b><small>'+sub(r)+'</small>'+ib(r.id)+'</div>';});
+  h+='<div class="cl">Overall</div>';
+  rows.forEach(r=>{h+='<div class="cv'+(n>1&&r.overall===maxO?' w':'')+'"><b>'+r.overall+'</b><small>/100</small></div>';});
+  h+='<div class="cl">MPG · GP</div>';
+  rows.forEach(r=>{h+='<div class="cv"><small>'+r.mpg+' · '+r.gp+'</small></div>';});
+  CATS.forEach(c=>{
+    const b=best(c);
+    h+='<div class="cl">'+c[3]+' '+c[1]+'</div>';
+    rows.forEach(r=>{const sc=r.s[c[0]], win=n>1&&b!==null&&r.n[c[0]]===b;
+      h+='<div class="cv'+(win?' w':'')+'"><span class="bt"><i style="width:'+(sc*10)+'%;background:'+hue(sc)+'"></i></span><b>'+sc+'</b> <small>'+r.v[c[0]]+'</small></div>';});
+  });
+  return h+'</div>';
+}
+function weekCard(){
+  let h='<section class="card"><div class="ch"><span class="em">📅</span>Games this week</div>';
+  if(!SCHED.length||!Object.keys(SCHED[wk].teams).length)return h+'<div class="empty">The schedule isn’t available yet. It will appear after the next update.</div></section>';
+  const w=SCHED[wk];
+  h+='<div class="mini">'+SCHED.map((x,i)=>'<button class="pill'+(i===wk?' on':'')+'" data-wk="'+i+'">'+(i===0?"This week":"Next week")+'</button>').join("")+'</div><div class="cap">'+esc(w.label)+'</div>';
+  const es=Object.keys(w.teams).map(t=>({t:t,d:w.teams[t],n:w.teams[t].filter(x=>x>0).length})).sort((a,b)=>b.n-a.n||a.t.localeCompare(b.t));
+  h+='<div class="tr2"><span class="tn"></span><div class="dots dl">'+["M","T","W","T","F","S","S"].map(x=>'<span>'+x+'</span>').join("")+'</div><span class="gc"></span></div>';
+  let last=-1;
+  es.forEach(e=>{
+    if(e.n!==last){h+='<div class="gh">'+e.n+' game'+(e.n===1?"":"s")+'</div>';last=e.n;}
+    h+='<div class="tr2"><span class="tn">'+esc(e.t)+'</span><div class="dots">'+e.d.map(x=>'<span class="dot'+(x===2?' d':x===1?' u':'')+'"></span>').join("")+'</div><b class="gc">'+e.n+'</b></div>';
+  });
+  const max=es[0].n, top=new Set(es.filter(e=>e.n===max).map(e=>e.t));
+  const ps=pool().filter(r=>top.has(tName(r))).sort((a,b)=>b.overall-a.overall).slice(0,8);
+  h+='<div class="gh" style="margin-top:8px">Best players on '+max+'-game teams</div>'+ps.map(prow).join("");
+  return h+'<div class="cap">Orange dots are upcoming games, gray dots are games already played.</div></section>';
+}
+function frow(x){
+  const r=x.r,a=x.f.a;
+  return '<div class="row" data-id="'+r.id+'">'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+ib(r.id)+sub(r)+'</small><span class="fl">'+a[0]+' pts · '+a[1]+' reb · '+a[2]+' ast</span></span><span class="val '+(x.f.d>0?"up":"dn")+'">'+(x.f.d>0?"+":"")+x.f.d+'</span>'+star(r.id)+'</div>';
+}
+function formCard(){
+  let h='<section class="card"><div class="ch"><span class="em">🌡️</span>Hot and cold (last 5 games)</div>';
+  const byId={};pool().forEach(r=>{byId[r.id]=r;});
+  const list=Object.keys(FORM).filter(id=>byId[id]).map(id=>({r:byId[id],f:FORM[id]}));
+  if(!list.length)return h+'<div class="empty">The hot and cold list will appear once the app has saved each player’s last 5 games. It builds up over the first update or two.</div></section>';
+  const hot=list.filter(x=>x.f.d>0).sort((a,b)=>b.f.d-a.f.d).slice(0,6);
+  const cold=list.filter(x=>x.f.d<0).sort((a,b)=>a.f.d-b.f.d).slice(0,6);
+  h+='<div class="gh">🔥 Hot</div>'+(hot.map(frow).join("")||'<div class="empty">None right now.</div>');
+  h+='<div class="gh">🧊 Cold</div>'+(cold.map(frow).join("")||'<div class="empty">None right now.</div>');
+  return h+'<div class="cap">Form compares the last 5 games with the season, using the same 1-10 scoring on points, rebounds, assists, steals, blocks and turnovers. +9 means about 9 more rating points (out of 60) than usual. Shooting percentages are left out because 5 games is too few to trust.</div></section>';
+}
+function renderResearch(){
+  const prev=$("cq")?$("cq").value:"";
+  const rows=cmpIds.map(findRow).filter(Boolean);
+  let c='<section class="card"><div class="ch"><span class="em">⚖️</span>Compare players<span class="ct">up to 3</span></div><div class="cin"><input id="cq" type="search" placeholder="Search a player to add" autocomplete="off"><div id="cres"></div></div>';
+  c+=rows.length?cmpTable(rows)+(rows.length<2?'<div class="cap">Add one more player to compare.</div>':''):'<div class="empty">Search above to pick two or three players.</div>';
+  c+='</section>';
+  $("research").innerHTML='<div class="rs">'+c+weekCard()+formCard()+'</div>';
+  if(prev){$("cq").value=prev;cmpSearch(prev);}
+}
+
 /* ---------- Player sheet ---------- */
 function openPlayer(id){
   const r=cur().find(x=>x.id===id)||ALL.find(x=>x.id===id);
   if(!r)return;
   let h='<button class="x" id="cl" aria-label="Close">×</button>';
-  h+='<div class="shh">'+av(r,72)+'<div><div class="shn">'+esc(r.name)+'</div><div class="shs">'+esc(tName(r))+(r.pos?" · "+esc(r.pos):"")+' · '+r.mpg+' MPG · '+r.gp+' GP</div></div><div class="shov">'+r.overall+'<small>of 100</small></div></div>';
+  const b=BASE&&BASE.p[r.id], bo=b?($("qt").checked?b[1]:b[0]):null;
+  const dl=(bo===null||bo===undefined||bo===r.overall)?"":' · <span class="mv '+(r.overall>bo?"up":"dn")+'" style="margin:0">'+(r.overall>bo?"▲ +":"▼ −")+Math.abs(r.overall-bo)+' vs '+BASE.days+'d</span>';
+  const ij=INJ[r.id];
+  h+='<div class="shh">'+av(r,72)+'<div><div class="shn">'+esc(r.name)+'</div><div class="shs">'+esc(tName(r))+(r.pos?" · "+esc(r.pos):"")+' · '+r.mpg+' MPG · '+r.gp+' GP</div></div><div class="shov">'+r.overall+'<small>of 100'+dl+'</small></div></div>';
+  if(ij&&ij.s)h+='<div class="inj">'+ib(r.id)+esc(ij.s+(ij.d?": "+ij.d:""))+'</div>';
   h+='<button class="addbtn" data-st="'+r.id+'">'+(inTeam(r.id)?"★ On my team · tap to remove":"☆ Add to my team")+'</button>';
+  h+='<button class="addbtn" data-cmpopen="'+r.id+'">⚖️ Compare with other players</button>';
   CATS.forEach(c=>{const sc=r.s[c[0]];
     h+='<div class="br"><span>'+c[3]+' '+c[1]+'</span><span class="bt"><i style="width:'+(sc*10)+'%;background:'+hue(sc)+'"></i></span><span class="bs">'+sc+'</span><span class="bv">'+r.v[c[0]]+'</span></div>';});
   h+='<p class="note">'+($("qt").checked?"Ranked among qualified players only.":"Ranked against all players.")+'</p>';
@@ -760,21 +1146,30 @@ function openPlayer(id){
 const closeSheet=()=>$("ov").classList.remove("show");
 
 /* ---------- wiring ---------- */
-const HOLD={L:"Search a player or team",M:"Search to add players (name or team)",T:"Filter by player or team"};
+const HOLD={L:"Search a player or team",M:"Search to add players (name or team)",R:"",T:"Filter by player or team"};
 function setView(v){
   view=v;
   $("leaders").classList.toggle("hide",v!=="L");
   $("myteam").classList.toggle("hide",v!=="M");
+  $("research").classList.toggle("hide",v!=="R");
   $("tablewrap").classList.toggle("hide",v!=="T");
-  $("tabL").classList.toggle("on",v==="L");$("tabM").classList.toggle("on",v==="M");$("tabT").classList.toggle("on",v==="T");
-  $("q").placeholder=HOLD[v];
+  $("tabL").classList.toggle("on",v==="L");$("tabM").classList.toggle("on",v==="M");$("tabR").classList.toggle("on",v==="R");$("tabT").classList.toggle("on",v==="T");
+  $("q").placeholder=HOLD[v];$("q").style.display=v==="R"?"none":"";
   draw();
 }
 function draw(){
   $("cnt").textContent="("+cur().length+")";
-  if(view==="L")renderLeaders();else if(view==="M")renderTeam();else renderTable();
+  if(view==="L")renderLeaders();else if(view==="M")renderTeam();else if(view==="R")renderResearch();else renderTable();
 }
 document.addEventListener("click",e=>{
+  const rmv=e.target.closest("[data-rm]");
+  if(rmv){cmpIds=cmpIds.filter(x=>x!==rmv.dataset.rm);renderResearch();return;}
+  const ca=e.target.closest("[data-cmp]");
+  if(ca){addCmp(ca.dataset.cmp);if($("cq"))$("cq").value="";renderResearch();return;}
+  const co=e.target.closest("[data-cmpopen]");
+  if(co){addCmp(co.dataset.cmpopen);closeSheet();setView("R");window.scrollTo(0,0);return;}
+  const wb=e.target.closest("[data-wk]");
+  if(wb){wk=+wb.dataset.wk;renderResearch();return;}
   const st=e.target.closest("[data-st]");
   if(st){
     const id=st.dataset.st,fromSheet=st.classList.contains("addbtn");
@@ -792,13 +1187,16 @@ document.addEventListener("click",e=>{
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeSheet();});
 $("q").oninput=draw;$("qt").onchange=draw;
 restorePos();document.querySelectorAll(".pos input").forEach(i=>{i.onchange=()=>{savePos();draw();};});
-$("tabL").onclick=()=>setView("L");$("tabM").onclick=()=>setView("M");$("tabT").onclick=()=>setView("T");
+$("tabL").onclick=()=>setView("L");$("tabM").onclick=()=>setView("M");$("tabR").onclick=()=>setView("R");$("tabT").onclick=()=>setView("T");
+document.addEventListener("input",e=>{if(e.target.id==="cq")cmpSearch(e.target.value);});
 $("rules").textContent="__RULES__";
+$("mvnote").textContent=BASE?"Arrows show rank change vs "+BASE.days+" day"+(BASE.days===1?"":"s")+" ago ("+BASE.date+"). Badges show the ESPN injury report.":"Rank-change arrows appear once the app has saved a day or two of history. Badges show the ESPN injury report.";
 draw();
 </script></body></html>"""
 
 
-def write_html(rows_all, rows_q, path="index.html"):
+def write_html(rows_all, rows_q, path="index.html", extras=None):
+    ex = {"inj": {}, "sched": [], "form": {}, "base": None, **(extras or {})}
     cats = [[c[0], c[1], c[3], *CATEGORY_INFO[c[0]]] for c in CATEGORIES]
     a = MIN_ATTEMPTS_PER_GAME
     rules = (f"Qualified = at least {MIN_GP_PCT:.0%} of team games and {MIN_MPG:g} MPG. "
@@ -808,6 +1206,10 @@ def write_html(rows_all, rows_q, path="index.html"):
                 .replace("__CATS__", json.dumps(cats))
                 .replace("__RULES__", rules)
                 .replace("__TEAMS__", json.dumps(TEAM_LOOKUP))
+                .replace("__INJ__", json.dumps(ex["inj"]))
+                .replace("__SCHED__", json.dumps(ex["sched"]))
+                .replace("__FORM__", json.dumps(ex["form"]))
+                .replace("__BASE__", json.dumps(ex["base"]))
                 .replace("__UPDATED__", datetime.now(ZoneInfo("America/Toronto")).strftime("%b %d, %I:%M %p ET"))
                 .replace("__ROWS_ALL__", json.dumps(rows_all))
                 .replace("__ROWS_Q__", json.dumps(rows_q)))
@@ -826,4 +1228,5 @@ if __name__ == "__main__":
     for r in rows_all:
         counts[r["g"] or "none"] = counts.get(r["g"] or "none", 0) + 1
     print("Positions found:", counts)
-    write_html(rows_all, rows_q)
+    today = datetime.now(ZoneInfo("America/Toronto")).date()
+    write_html(rows_all, rows_q, extras=build_extras(rows_all, rows_q, today))
