@@ -85,6 +85,7 @@ _TEAMS = [
     ("SAS", "San Antonio Spurs", "", ("SA",)), ("TOR", "Toronto Raptors", "", ()),
     ("UTA", "Utah Jazz", "", ("UTAH",)), ("WAS", "Washington Wizards", "", ("WSH",)),
 ]
+TEAM_ABBR = {name: canon for canon, name, _extra, _others in _TEAMS}   # "Boston Celtics" -> "BOS"
 TEAM_LOOKUP = {code: {"n": name, "a": extra}
                for canon, name, extra, others in _TEAMS
                for code in (canon, *others)}
@@ -607,12 +608,14 @@ def fetch_events(day, cache):
         events = []
         for e in data.get("events", []):
             comp = (e.get("competitions") or [{}])[0]
-            teams = []
+            comps = []
             for c in comp.get("competitors", []):
                 t = c.get("team") or {}
-                teams.append(team_key(t.get("abbreviation") or t.get("displayName") or ""))
+                comps.append({"t": team_key(t.get("abbreviation") or t.get("displayName") or ""),
+                              "h": c.get("homeAway") == "home"})
+            teams = [c["t"] for c in comps]
             status = (e.get("status") or {}).get("type") or {}
-            events.append({"id": str(e.get("id")), "teams": teams,
+            events.append({"id": str(e.get("id")), "teams": teams, "comps": comps,
                            "done": bool(status.get("completed")),
                            "type": (e.get("season") or {}).get("type")})
         cache[key] = events
@@ -632,9 +635,15 @@ def build_schedule(today, cache):
             for ev in fetch_events(start + timedelta(days=i), cache):
                 if ev["type"] not in (None, 2):
                     continue
-                for t in ev["teams"]:
-                    if t:
-                        teams.setdefault(t, [0] * 7)[i] = 2 if ev["done"] else 1
+                comps = ev.get("comps") or []
+                for c in comps:
+                    if not c["t"]:
+                        continue
+                    opp = next((o for o in comps if o is not c), None)
+                    teams.setdefault(c["t"], [0] * 7)[i] = {
+                        "s": 2 if ev["done"] else 1,
+                        "o": TEAM_ABBR.get(opp["t"], opp["t"]) if opp else "",
+                        "h": 1 if c["h"] else 0}
         label = (f"{'This' if w == 0 else 'Next'} week: {start:%b} {start.day} to "
                  f"{end:%b} {end.day} (Mon to Sun)")
         weeks.append({"label": label, "teams": teams})
@@ -744,12 +753,12 @@ def update_history(snapshot, today):
     return hist
 
 
-def pick_baseline(hist, today):
-    """The saved snapshot closest to 7 days ago (or the oldest we have)."""
+def pick_baseline(hist, today, back=7):
+    """The saved snapshot closest to `back` days ago (or the oldest we have)."""
     older = sorted(k for k in hist if k < today.isoformat())
     if not older:
         return None
-    target = (today - timedelta(days=7)).isoformat()
+    target = (today - timedelta(days=back)).isoformat()
     ok = [k for k in older if k <= target]
     key = ok[-1] if ok else older[0]
     d = date.fromisoformat(key)
@@ -802,8 +811,9 @@ def build_extras(rows_all, rows_q, today):
     try:
         if rows_all:
             hist = update_history(make_snapshot(rows_all, rows_q), today)
-            ex["base"] = pick_baseline(hist, today)
-            print("History:", (f"comparing with {ex['base']['days']} day(s) ago"
+            d1, d7 = pick_baseline(hist, today, 1), pick_baseline(hist, today, 7)
+            ex["base"] = {"d1": d1, "d7": d7} if (d1 or d7) else None
+            print("History:", (f"yesterday's comparison = {d1['days']} day(s) ago, weekly comparison = {d7['days']} day(s) ago"
                                if ex["base"] else "first snapshot saved, arrows start tomorrow"))
     except Exception as e:
         print("Warning: could not save history:", e)
@@ -884,7 +894,7 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%}
 th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:center;white-space:nowrap}
 th{background:var(--head);position:sticky;top:0;cursor:pointer;user-select:none;z-index:2}
-.static-th th{cursor:default}
+.static-th th,#myteam th{cursor:default}
 th:first-child,td:first-child{position:sticky;left:0;background:var(--card);z-index:1;padding:4px 6px;border-right:1px solid var(--line)}
 th:first-child{background:var(--head);z-index:3}
 td.nmc,th:nth-child(2){text-align:left;min-width:170px}
@@ -933,6 +943,25 @@ td.o{font-weight:700}
 .mv{font-size:11px;font-weight:700;margin-left:6px;white-space:nowrap}
 .mv.up{color:#16a34a}.mv.dn{color:#dc2626}
 .big .mv{font-size:13px}
+.mvs{display:inline-block;min-width:34px;text-align:right}
+.mvs .mv{margin:0}
+.row .val{min-width:54px;text-align:right}
+.big{white-space:nowrap}
+.ch{white-space:nowrap}
+.ttl{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.lbar{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin:0 2px 10px;font-size:13px;color:var(--muted)}
+.fbar{flex:1 1 100%}
+.lbar .pill{padding:4px 10px;font-size:12px}
+.pb{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:8px 14px 2px}
+.pb div{background:var(--head);border-radius:10px;padding:8px 2px;text-align:center}
+.pb b{display:block;font-size:17px}
+.pb small{color:var(--muted);font-size:11px}
+.sug{margin:6px 14px 8px;font-size:13px}
+.sh{margin-top:12px}
+.wk{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;padding:0 14px 6px}
+.wk.hd span{text-align:center;font-size:10px;color:var(--muted)}
+.dc{display:flex;flex-direction:column;align-items:center;gap:3px;min-height:27px}
+.dc small{font-size:10px;color:var(--muted);line-height:1;white-space:nowrap}
 .rs{display:grid;gap:12px}
 .cin{padding:6px 14px 8px}
 .cin input{width:100%;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font-size:16px;outline:none}
@@ -991,7 +1020,12 @@ const CATS=__CATS__, DATA=__DATA__, TEAMS=__TEAMS__;
 let season="cur", ALL=DATA.cur.all, QUAL=DATA.cur.q;
 const isCur=()=>season==="cur";
 const ESPNP="https://a.espncdn.com/i/headshots/nba/players/full/";
-const INJ=__INJ__, SCHED=__SCHED__, FORM=__FORM__, BASE=__BASE__;
+const INJ=__INJ__, SCHED=__SCHED__, FORM=__FORM__, BASES=__BASE__;
+let trend="d1", BASE=null;
+try{trend=localStorage.getItem("nba_trend_v1")||"d1";}catch(e){}
+function pickBase(){BASE=BASES?(BASES[trend]||BASES.d7||BASES.d1||null):null;}
+pickBase();
+const agoText=d=>d===1?"yesterday":d+" days ago";
 // CATS entry: [key, label, lowerIsBetter, emoji, title]
 const $=id=>document.getElementById(id);
 let view="L", key="overall", dir=-1;
@@ -1074,12 +1108,26 @@ function searchHTML(q){
 /* ---------- injury badges + rank movement ---------- */
 function ibt(s){const t=String(s||"").toLowerCase();return t.includes("out")?"OUT":t.includes("day")?"DTD":t.includes("question")?"Q":t.includes("doubt")?"D":t.includes("prob")?"P":s?String(s).slice(0,4).toUpperCase():"";}
 function ib(id){const i=isCur()?INJ[id]:null;if(!i||!i.s)return "";const t=ibt(i.s);return '<span class="ib'+(t==="OUT"?" out":"")+'" title="'+esc(i.s+(i.d?": "+i.d:""))+'">'+t+'</span>';}
+/* when scores are re-ranked within a position, last time's overall is re-ranked the same way so the comparison is like for like */
+function relBaseOverall(rows){
+  const have=rows.filter(r=>BASE.p[r.id]);
+  const sc=CATS.map((c,j)=>denseScores(have.map(r=>BASE.p[r.id][2+j]),c[2])), m={};
+  have.forEach((r,i)=>{m[r.id]=sc.reduce((t,a)=>t+a[i],0);});
+  return m;
+}
+function overallDelta(r){
+  if(!BASE||!isCur())return null;
+  const b=BASE.p[r.id];if(!b)return null;
+  const bo=rel()?relBaseOverall(pool())[r.id]:($("qt").checked?b[1]:b[0]);
+  return(bo===null||bo===undefined)?null:r.overall-bo;
+}
 function moves(rows,k,lower){
-  if(!BASE||!isCur()||rel())return null;
+  if(!BASE||!isCur())return null;
   const idx=k==="overall"?-1:CATS.findIndex(c=>c[0]===k), both=[];
+  const rb=(k==="overall"&&rel())?relBaseOverall(rows):null;
   rows.forEach(r=>{
     const b=BASE.p[r.id];if(!b)return;
-    const cv=k==="overall"?r.overall:r.n[k], bv=k==="overall"?($("qt").checked?b[1]:b[0]):b[2+idx];
+    const cv=k==="overall"?r.overall:r.n[k], bv=k==="overall"?(rb?rb[r.id]:($("qt").checked?b[1]:b[0])):b[2+idx];
     if(cv===null||cv===undefined||bv===null||bv===undefined)return;
     both.push({id:r.id,c:cv,b:bv});
   });
@@ -1088,8 +1136,9 @@ function moves(rows,k,lower){
   return out;
 }
 function mvh(mv,id){
-  const d=mv&&mv[id];if(!d)return "";
-  return '<span class="mv '+(d>0?"up":"dn")+'" title="Rank change vs '+BASE.days+' day'+(BASE.days===1?"":"s")+' ago">'+(d>0?"▲":"▼")+Math.abs(d)+'</span>';
+  if(!mv)return "";
+  const d=mv[id];
+  return '<span class="mvs">'+(d?'<span class="mv '+(d>0?"up":"dn")+'" title="Rank change vs '+agoText(BASE.days)+'">'+(d>0?"▲":"▼")+Math.abs(d)+'</span>':"")+'</span>';
 }
 
 /* ---------- Leaders (front page) ---------- */
@@ -1103,12 +1152,18 @@ function topList(rows,k,lower){
 function card(em,title,list,val,k,cls,mv){
   if(!list.length)return "";
   const f=list[0];
-  let h='<section class="card '+(cls||"")+'"><div class="ch"><span class="em">'+em+'</span>'+title+posChip()+'</div>';
-  h+='<div class="lead" data-id="'+f.id+'">'+av(f,72)+'<div class="nm"><b>'+esc(f.name)+'</b><small>'+ib(f.id)+sub(f)+' · '+f.mpg+' MPG</small></div><div class="big">'+val(f)+mvh(mv,f.id)+'</div></div>';
+  let h='<section class="card '+(cls||"")+'"><div class="ch"><span class="em">'+em+'</span><span class="ttl">'+title+'</span></div>';
+  h+='<div class="lead" data-id="'+f.id+'">'+av(f,72)+'<div class="nm"><b>'+esc(f.name)+'</b><small>'+ib(f.id)+sub(f)+' · '+f.mpg+' MPG</small></div><div class="big">'+mvh(mv,f.id)+val(f)+'</div></div>';
   list.slice(1).forEach((r,i)=>{
-    h+='<div class="row" data-id="'+r.id+'"><span class="rk">'+(i+2)+'</span>'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+ib(r.id)+sub(r)+'</small></span><span class="val">'+val(r)+mvh(mv,r.id)+'</span></div>';
+    h+='<div class="row" data-id="'+r.id+'"><span class="rk">'+(i+2)+'</span>'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+ib(r.id)+sub(r)+'</small></span>'+mvh(mv,r.id)+'<span class="val">'+val(r)+'</span></div>';
   });
   return h+'<button class="cf" data-k="'+k+'">Full ranking →</button></section>';
+}
+function lbar(){
+  let h="";
+  if(posSel().length)h+='<div class="fbar">Showing '+posNames().toLowerCase()+' only · '+(rel()?'scores re-ranked among them':'scores still compare with the whole league')+'</div>';
+  if(BASES&&isCur())h+='<span>Trend arrows:</span>'+["d1","d7"].filter(k=>BASES[k]).map(k=>'<button class="pill'+(trend===k?' on':'')+'" data-tr="'+k+'">'+(k==="d1"?"vs yesterday":"vs last week")+'</button>').join("");
+  return h?'<div class="lbar">'+h+'</div>':"";
 }
 function renderLeaders(){
   const rows=pool(), q=$("q").value.trim();
@@ -1117,7 +1172,7 @@ function renderLeaders(){
   else if(q){h=searchHTML(q);}
   else{
     const overall=[...rows].sort((a,b)=>b.overall-a.overall).slice(0,10);
-    h='<div class="grid">'+card("👑","Overall rating",overall,r=>r.overall+'<small>/100</small>',"overall","first",moves(rows,"overall",false));
+    h=lbar()+'<div class="grid">'+card("👑","Overall rating",overall,r=>r.overall+'<small>/100</small>',"overall","first",moves(rows,"overall",false));
     CATS.forEach(c=>{h+=card(c[3],c[4],topList(rows,c[0],c[2]),r=>r.v[c[0]],c[0],"",moves(rows,c[0],c[2]));});
     h+='</div>';
   }
@@ -1156,6 +1211,32 @@ function renderTable(){
 }
 
 /* ---------- My team ---------- */
+function posBox(mine){
+  const cnt={G:0,F:0,C:0}, w={G:0,F:0,C:0}, raw={};
+  let hyb=0, unk=0;
+  mine.forEach(r=>{
+    const g=(r.g||"").split("").filter(Boolean);
+    if(!g.length)unk++;
+    if(g.length>1)hyb++;
+    g.forEach(c=>{cnt[c]++;w[c]+=1/g.length;});
+    if(r.pos)raw[r.pos]=(raw[r.pos]||0)+1;
+  });
+  const ORD=["PG","SG","G","G-F","SF","PF","F","F-C","C"], rk=k=>{const i=ORD.indexOf(k);return i<0?99:i;};
+  const rawTxt=Object.keys(raw).sort((a,b)=>rk(a)-rk(b)||a.localeCompare(b)).map(k=>k+" "+raw[k]);
+  if(hyb)rawTxt.push(hyb+" player"+(hyb===1?"":"s")+" listed at two positions count in both");
+  if(unk)rawTxt.push(unk+" without a listed position");
+  const n=mine.length, tot=w.G+w.F+w.C;
+  const LONG={G:"guard",F:"forward",C:"center"}, WHY={G:"assists, steals and 3-point shooting",F:"a mix of scoring and rebounding",C:"rebounds, blocks and field goal %"};
+  let sug;
+  if(n<4||tot===0)sug="Add a few more players to get a position check.";
+  else{
+    const ord=["G","F","C"].sort((a,b)=>w[a]-w[b]), lo=ord[0], hi=ord[2];
+    const lop=w[hi]/tot>=0.6||(w[lo]===0&&n>=5);
+    sug=lop?"⚖️ Your team leans "+LONG[hi]+" ("+cnt[hi]+" of "+n+" players). Consider adding a "+LONG[lo]+" for "+WHY[lo]+".":"✅ Your position mix looks balanced.";
+  }
+  return '<div class="cap">Position breakdown</div><div class="pb">'+["G","F","C"].map(c=>'<div><b>'+cnt[c]+'</b><small>'+POSN[c]+'</small></div>').join("")+'</div>'+
+    (rawTxt.length?'<div class="cap">'+rawTxt.join(" · ")+'</div>':'')+'<div class="sug">'+sug+'</div>';
+}
 function summary(mine){
   const n=mine.length;
   const avgO=(mine.reduce((s,r)=>s+r.overall,0)/n).toFixed(1);
@@ -1168,12 +1249,19 @@ function summary(mine){
   h+='<div class="lead static"><div class="nm"><b>Average overall</b><small>Strongest: '+best+'<br>Weakest: '+worst+'</small></div><div class="big">'+avgO+'<small>/100</small></div></div>';
   const hurt=isCur()?mine.filter(r=>INJ[r.id]&&INJ[r.id].s):[];
   if(hurt.length)h+='<div class="cap">⚠️ Injury report: '+hurt.map(r=>esc(r.name)+' ('+ibt(INJ[r.id].s)+')').join(", ")+'</div>';
+  h+=posBox(mine);
   h+='<div class="cap">Combined per-game totals</div><div class="tot">'+
     [["ppg","PTS"],["rpg","REB"],["apg","AST"],["spg","STL"],["bpg","BLK"],["tov","TO"]].map(p=>'<div><b>'+tot(p[0])+'</b><small>'+p[1]+'</small></div>').join("")+'</div>';
   h+='<div class="cap">Average category score (1 to 10)</div><div class="prof">'+
     CATS.map(c=>{const a=avg(c);return '<div class="br avg"><span>'+c[3]+' '+c[1]+'</span><span class="bt"><i style="width:'+(a*10)+'%;background:'+hue(a)+'"></i></span><span class="bs">'+a.toFixed(1)+'</span></div>';}).join("")+'</div></section>';
   return h;
 }
+const TW=COLW.reduce((a,b)=>a+b,0), CGH=COLW.map(w=>'<col style="width:'+w+'px">').join("");
+function shell(id,head,body){
+  const st='style="min-width:'+TW+'px;width:100%"';
+  return '<div class="sh"><div class="hwrap" id="'+id+'h"><table class="ft" '+st+'><colgroup>'+CGH+'</colgroup><thead>'+head+'</thead></table></div><div class="bwrap" id="'+id+'b"><table class="ft" '+st+'><colgroup>'+CGH+'</colgroup><tbody>'+body+'</tbody></table></div></div>';
+}
+function syncShell(id){const b=$(id+"b");if(b)b.addEventListener("scroll",()=>{$(id+"h").scrollLeft=b.scrollLeft;});}
 function renderTeam(){
   const rows=cur(), byId={};
   rows.forEach(r=>{byId[r.id]=r;});
@@ -1187,12 +1275,13 @@ function renderTeam(){
   }else{
     if(mine.length)h+=summary(mine);
     if(mine.length){
-      h+='<div class="wrap mt"><table class="static-th"><thead><tr><th class="pk"></th>'+cols.map(c=>'<th>'+c[1]+'</th>').join("")+'</tr></thead><tbody>'+mine.map(trow).join("")+'</tbody></table></div>';
+      h+=shell("mt",'<tr><th class="pk"></th>'+cols.map(c=>'<th>'+c[1]+'</th>').join("")+'</tr>',mine.map(trow).join(""));
     }
     if(missing)h+='<p class="note">'+missing+' saved player'+(missing===1?" isn’t":"s aren’t")+' rated in this view (not qualified, or not in the data). Turn off “Qualified players only” to see them.</p>';
     h+='<p class="note">Your team is saved in this browser on this device. Ratings update every night.</p>';
   }
   $("myteam").innerHTML=h;
+  syncShell("mt");
 }
 
 /* ---------- Research tab: compare, games this week, hot and cold ---------- */
@@ -1229,17 +1318,17 @@ function weekCard(){
   if(!SCHED.length||!Object.keys(SCHED[wk].teams).length)return h+'<div class="empty">The schedule isn’t available yet. It will appear after the next update.</div></section>';
   const w=SCHED[wk];
   h+='<div class="mini">'+SCHED.map((x,i)=>'<button class="pill'+(i===wk?' on':'')+'" data-wk="'+i+'">'+(i===0?"This week":"Next week")+'</button>').join("")+'</div><div class="cap">'+esc(w.label)+'</div>';
-  const es=Object.keys(w.teams).map(t=>({t:t,d:w.teams[t],n:w.teams[t].filter(x=>x>0).length})).sort((a,b)=>b.n-a.n||a.t.localeCompare(b.t));
-  h+='<div class="tr2"><span class="tn"></span><div class="dots dl">'+["M","T","W","T","F","S","S"].map(x=>'<span>'+x+'</span>').join("")+'</div><span class="gc"></span></div>';
+  const es=Object.keys(w.teams).map(t=>({t:t,d:w.teams[t],n:w.teams[t].filter(x=>x).length})).sort((a,b)=>b.n-a.n||a.t.localeCompare(b.t));
+  h+='<div class="wk hd">'+["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(x=>'<span>'+x+'</span>').join("")+'</div>';
   let last=-1;
   es.forEach(e=>{
     if(e.n!==last){h+='<div class="gh">'+e.n+' game'+(e.n===1?"":"s")+'</div>';last=e.n;}
-    h+='<div class="tr2"><span class="tn">'+esc(e.t)+'</span><div class="dots">'+e.d.map(x=>'<span class="dot'+(x===2?' d':x===1?' u':'')+'"></span>').join("")+'</div><b class="gc">'+e.n+'</b></div>';
+    h+='<div class="tr2"><span class="tn">'+esc(e.t)+'</span><b class="gc">'+e.n+'</b></div><div class="wk">'+e.d.map(x=>'<div class="dc"><span class="dot'+(x?(x.s===2?' d':' u'):'')+'"></span><small>'+(x?(x.h?"":"@")+esc(x.o):"")+'</small></div>').join("")+'</div>';
   });
   const max=es[0].n, top=new Set(es.filter(e=>e.n===max).map(e=>e.t));
   const ps=pool().filter(r=>top.has(tName(r))).sort((a,b)=>b.overall-a.overall).slice(0,8);
   h+='<div class="gh" style="margin-top:8px">Best players on '+max+'-game teams</div>'+ps.map(prow).join("");
-  return h+'<div class="cap">Orange dots are upcoming games, gray dots are games already played.</div></section>';
+  return h+'<div class="cap">Orange dots are upcoming games, gray dots are games already played. “@” means an away game.</div></section>';
 }
 function frow(x){
   const r=x.r,a=x.f.a;
@@ -1272,8 +1361,8 @@ function openPlayer(id){
   const r=pool().find(x=>x.id===id)||cur().find(x=>x.id===id)||ALL.find(x=>x.id===id);
   if(!r)return;
   let h='<button class="x" id="cl" aria-label="Close">×</button>';
-  const b=isCur()&&BASE&&BASE.p[r.id], bo=b?($("qt").checked?b[1]:b[0]):null;
-  const dl=(bo===null||bo===undefined||bo===r.overall)?"":' · <span class="mv '+(r.overall>bo?"up":"dn")+'" style="margin:0">'+(r.overall>bo?"▲ +":"▼ −")+Math.abs(r.overall-bo)+' vs '+BASE.days+'d</span>';
+  const od=overallDelta(r);
+  const dl=(od===null||od===0)?"":' · <span class="mv '+(od>0?"up":"dn")+'" style="margin:0">'+(od>0?"▲ +":"▼ −")+Math.abs(od)+' vs '+agoText(BASE.days)+'</span>';
   const ij=isCur()?INJ[r.id]:null;
   h+='<div class="shh">'+av(r,72)+'<div><div class="shn">'+esc(r.name)+'</div><div class="shs">'+esc(tName(r))+(r.pos?" · "+esc(r.pos):"")+' · '+r.mpg+' MPG · '+r.gp+' GP</div></div><div class="shov">'+r.overall+'<small>of 100'+dl+'</small></div></div>';
   if(ij&&ij.s)h+='<div class="inj">'+ib(r.id)+esc(ij.s+(ij.d?": "+ij.d:""))+'</div>';
@@ -1291,7 +1380,7 @@ function setView(v){
   view=v;
   $("leaders").classList.toggle("hide",v!=="L");
   $("myteam").classList.toggle("hide",v!=="M");
-  document.querySelector(".main").classList.toggle("wide",v==="T");
+  document.querySelector(".main").classList.toggle("wide",v==="T"||v==="M");
   $("research").classList.toggle("hide",v!=="R");
   $("tablewrap").classList.toggle("hide",v!=="T");
   $("tabL").classList.toggle("on",v==="L");$("tabM").classList.toggle("on",v==="M");$("tabR").classList.toggle("on",v==="R");$("tabT").classList.toggle("on",v==="T");
@@ -1310,6 +1399,8 @@ document.addEventListener("click",e=>{
   if(ca){addCmp(ca.dataset.cmp);if($("cq"))$("cq").value="";renderResearch();return;}
   const co=e.target.closest("[data-cmpopen]");
   if(co){addCmp(co.dataset.cmpopen);closeSheet();setView("R");window.scrollTo(0,0);return;}
+  const tb=e.target.closest("[data-tr]");
+  if(tb){trend=tb.dataset.tr;try{localStorage.setItem("nba_trend_v1",trend);}catch(x){}pickBase();updateNote();draw();return;}
   const wb=e.target.closest("[data-wk]");
   if(wb){wk=+wb.dataset.wk;renderResearch();return;}
   const st=e.target.closest("[data-st]");
@@ -1335,7 +1426,7 @@ document.addEventListener("input",e=>{if(e.target.id==="cq")cmpSearch(e.target.v
 $("rules").textContent="__RULES__";
 const SUBCUR=$("sub").textContent;
 function updateNote(){
-  $("mvnote").textContent=!isCur()?"Showing final "+DATA.prev.label+" stats, rated the same way. Rank-change arrows, injuries, the schedule and hot/cold are current-season only.":BASE?"Arrows show rank change vs "+BASE.days+" day"+(BASE.days===1?"":"s")+" ago ("+BASE.date+"). Badges show the ESPN injury report.":"Rank-change arrows appear once the app has saved a day or two of history. Badges show the ESPN injury report.";
+  $("mvnote").textContent=!isCur()?"Showing final "+DATA.prev.label+" stats, rated the same way. Rank-change arrows, injuries, the schedule and hot/cold are current-season only.":BASE?"Arrows show rank change vs "+agoText(BASE.days)+" ("+BASE.date+"). Badges show the ESPN injury report.":"Rank-change arrows appear once the app has saved a day or two of history. Badges show the ESPN injury report.";
 }
 function setSeason(k){
   season=k;ALL=DATA[k].all;QUAL=DATA[k].q;
