@@ -612,7 +612,7 @@ def fetch_events(day, cache):
             for c in comp.get("competitors", []):
                 t = c.get("team") or {}
                 comps.append({"t": team_key(t.get("abbreviation") or t.get("displayName") or ""),
-                              "h": c.get("homeAway") == "home"})
+                              "h": c.get("homeAway") == "home", "sc": c.get("score")})
             teams = [c["t"] for c in comps]
             status = (e.get("status") or {}).get("type") or {}
             events.append({"id": str(e.get("id")), "teams": teams, "comps": comps,
@@ -640,10 +640,17 @@ def build_schedule(today, cache):
                     if not c["t"]:
                         continue
                     opp = next((o for o in comps if o is not c), None)
-                    teams.setdefault(c["t"], [0] * 7)[i] = {
-                        "s": 2 if ev["done"] else 1,
-                        "o": TEAM_ABBR.get(opp["t"], opp["t"]) if opp else "",
-                        "h": 1 if c["h"] else 0}
+                    entry = {"s": 2 if ev["done"] else 1,
+                             "o": TEAM_ABBR.get(opp["t"], opp["t"]) if opp else "",
+                             "h": 1 if c["h"] else 0}
+                    if ev["done"] and opp:
+                        try:
+                            mine, theirs = int(float(c["sc"])), int(float(opp["sc"]))
+                            entry["w"] = 1 if mine > theirs else 0
+                            entry["p"] = f"{mine}-{theirs}"
+                        except (TypeError, ValueError):
+                            pass
+                    teams.setdefault(c["t"], [0] * 7)[i] = entry
         label = (f"{'This' if w == 0 else 'Next'} week: {start:%b} {start.day} to "
                  f"{end:%b} {end.day} (Mon to Sun)")
         weeks.append({"label": label, "teams": teams})
@@ -943,9 +950,8 @@ td.o{font-weight:700}
 .mv{font-size:11px;font-weight:700;margin-left:6px;white-space:nowrap}
 .mv.up{color:#16a34a}.mv.dn{color:#dc2626}
 .big .mv{font-size:13px}
-.mvs{display:inline-block;min-width:34px;text-align:right}
-.mvs .mv{margin:0}
-.row .val{min-width:54px;text-align:right}
+.row .val{display:inline-flex;align-items:baseline;justify-content:flex-end;flex:none}
+.val .mv,.big .mv{margin:0 6px 0 0}
 .big{white-space:nowrap}
 .ch{white-space:nowrap}
 .ttl{overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -958,10 +964,16 @@ td.o{font-weight:700}
 .pb small{color:var(--muted);font-size:11px}
 .sug{margin:6px 14px 8px;font-size:13px}
 .sh{margin-top:12px}
-.wk{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;padding:0 14px 6px}
+.tm{display:grid;grid-template-columns:190px auto 22px;justify-content:start;gap:2px 10px;align-items:center;padding:4px 14px}
+.tm .tn{font-size:14px}
+.wk{display:grid;grid-template-columns:repeat(7,54px);gap:4px}
 .wk.hd span{text-align:center;font-size:10px;color:var(--muted)}
 .dc{display:flex;flex-direction:column;align-items:center;gap:3px;min-height:27px}
 .dc small{font-size:10px;color:var(--muted);line-height:1;white-space:nowrap}
+.dc small.sc{font-size:9px;font-weight:700;letter-spacing:-.2px}
+.dc small.sc.w{color:#16a34a}
+.dc small.sc.l{color:#dc2626}
+@media (max-width:560px){.tm{grid-template-columns:1fr 22px;justify-content:stretch}.tm .wk{grid-column:1/-1;grid-template-columns:repeat(7,1fr)}}
 .rs{display:grid;gap:12px}
 .cin{padding:6px 14px 8px}
 .cin input{width:100%;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font-size:16px;outline:none}
@@ -1136,9 +1148,8 @@ function moves(rows,k,lower){
   return out;
 }
 function mvh(mv,id){
-  if(!mv)return "";
-  const d=mv[id];
-  return '<span class="mvs">'+(d?'<span class="mv '+(d>0?"up":"dn")+'" title="Rank change vs '+agoText(BASE.days)+'">'+(d>0?"▲":"▼")+Math.abs(d)+'</span>':"")+'</span>';
+  const d=mv&&mv[id];if(!d)return "";
+  return '<span class="mv '+(d>0?"up":"dn")+'" title="Rank change vs '+agoText(BASE.days)+'">'+(d>0?"▲":"▼")+Math.abs(d)+'</span>';
 }
 
 /* ---------- Leaders (front page) ---------- */
@@ -1155,7 +1166,7 @@ function card(em,title,list,val,k,cls,mv){
   let h='<section class="card '+(cls||"")+'"><div class="ch"><span class="em">'+em+'</span><span class="ttl">'+title+'</span></div>';
   h+='<div class="lead" data-id="'+f.id+'">'+av(f,72)+'<div class="nm"><b>'+esc(f.name)+'</b><small>'+ib(f.id)+sub(f)+' · '+f.mpg+' MPG</small></div><div class="big">'+mvh(mv,f.id)+val(f)+'</div></div>';
   list.slice(1).forEach((r,i)=>{
-    h+='<div class="row" data-id="'+r.id+'"><span class="rk">'+(i+2)+'</span>'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+ib(r.id)+sub(r)+'</small></span>'+mvh(mv,r.id)+'<span class="val">'+val(r)+'</span></div>';
+    h+='<div class="row" data-id="'+r.id+'"><span class="rk">'+(i+2)+'</span>'+av(r,36)+'<span class="nm">'+esc(r.name)+'<small>'+ib(r.id)+sub(r)+'</small></span><span class="val">'+mvh(mv,r.id)+val(r)+'</span></div>';
   });
   return h+'<button class="cf" data-k="'+k+'">Full ranking →</button></section>';
 }
@@ -1319,16 +1330,16 @@ function weekCard(){
   const w=SCHED[wk];
   h+='<div class="mini">'+SCHED.map((x,i)=>'<button class="pill'+(i===wk?' on':'')+'" data-wk="'+i+'">'+(i===0?"This week":"Next week")+'</button>').join("")+'</div><div class="cap">'+esc(w.label)+'</div>';
   const es=Object.keys(w.teams).map(t=>({t:t,d:w.teams[t],n:w.teams[t].filter(x=>x).length})).sort((a,b)=>b.n-a.n||a.t.localeCompare(b.t));
-  h+='<div class="wk hd">'+["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(x=>'<span>'+x+'</span>').join("")+'</div>';
+  h+='<div class="tm"><span></span><div class="wk hd">'+["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(x=>'<span>'+x+'</span>').join("")+'</div><span></span></div>';
   let last=-1;
   es.forEach(e=>{
     if(e.n!==last){h+='<div class="gh">'+e.n+' game'+(e.n===1?"":"s")+'</div>';last=e.n;}
-    h+='<div class="tr2"><span class="tn">'+esc(e.t)+'</span><b class="gc">'+e.n+'</b></div><div class="wk">'+e.d.map(x=>'<div class="dc"><span class="dot'+(x?(x.s===2?' d':' u'):'')+'"></span><small>'+(x?(x.h?"":"@")+esc(x.o):"")+'</small></div>').join("")+'</div>';
+    h+='<div class="tm"><span class="tn">'+esc(e.t)+'</span><div class="wk">'+e.d.map(x=>'<div class="dc"><span class="dot'+(x?(x.s===2?' d':' u'):'')+'"></span><small>'+(x?(x.h?"":"@")+esc(x.o):"")+'</small>'+(x&&x.s===2&&x.p?'<small class="sc '+(x.w?'w':'l')+'">'+(x.w?'W':'L')+' '+esc(x.p)+'</small>':'')+'</div>').join("")+'</div><b class="gc">'+e.n+'</b></div>';
   });
   const max=es[0].n, top=new Set(es.filter(e=>e.n===max).map(e=>e.t));
   const ps=pool().filter(r=>top.has(tName(r))).sort((a,b)=>b.overall-a.overall).slice(0,8);
   h+='<div class="gh" style="margin-top:8px">Best players on '+max+'-game teams</div>'+ps.map(prow).join("");
-  return h+'<div class="cap">Orange dots are upcoming games, gray dots are games already played. “@” means an away game.</div></section>';
+  return h+'<div class="cap">Orange dots are upcoming games, gray dots are games already played. “@” means an away game. Finished games show W or L and the final score, with the team’s own score first.</div></section>';
 }
 function frow(x){
   const r=x.r,a=x.f.a;
