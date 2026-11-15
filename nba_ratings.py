@@ -964,16 +964,18 @@ td.o{font-weight:700}
 .pb small{color:var(--muted);font-size:11px}
 .sug{margin:6px 14px 8px;font-size:13px}
 .sh{margin-top:12px}
-.tm{display:grid;grid-template-columns:190px auto 22px;justify-content:start;gap:2px 10px;align-items:center;padding:4px 14px}
-.tm .tn{font-size:14px}
+.tm{display:grid;grid-template-columns:190px auto;justify-content:start;gap:4px 12px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.tm.hd{border-top:0;padding:0 14px 2px}
+.tm .tn{font-size:14px;font-weight:600}
 .wk{display:grid;grid-template-columns:repeat(7,54px);gap:4px}
-.wk.hd span{text-align:center;font-size:10px;color:var(--muted)}
-.dc{display:flex;flex-direction:column;align-items:center;gap:3px;min-height:27px}
-.dc small{font-size:10px;color:var(--muted);line-height:1;white-space:nowrap}
-.dc small.sc{font-size:9px;font-weight:700;letter-spacing:-.2px}
+.wk.hd span{text-align:center;font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+.dc{display:flex;flex-direction:column;align-items:center;gap:4px;min-height:42px}
+.dc small{font-size:11px;color:var(--muted);line-height:1;white-space:nowrap}
+.dc small.sc{font-size:9.5px;font-weight:700;letter-spacing:-.2px}
+.gh.grp{padding:16px 14px 6px;font-size:13px}
 .dc small.sc.w{color:#16a34a}
 .dc small.sc.l{color:#dc2626}
-@media (max-width:560px){.tm{grid-template-columns:1fr 22px;justify-content:stretch}.tm .wk{grid-column:1/-1;grid-template-columns:repeat(7,1fr)}}
+@media (max-width:560px){.tm{grid-template-columns:1fr;gap:8px;padding:12px 14px}.tm.hd{padding:0 14px 4px}.tm.hd>span{display:none}.tm .wk{grid-template-columns:repeat(7,1fr);gap:5px}.dc small.sc{font-size:9px;letter-spacing:-.3px}}
 .rs{display:grid;gap:12px}
 .cin{padding:6px 14px 8px}
 .cin input{width:100%;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font-size:16px;outline:none}
@@ -1330,15 +1332,15 @@ function weekCard(){
   const w=SCHED[wk];
   h+='<div class="mini">'+SCHED.map((x,i)=>'<button class="pill'+(i===wk?' on':'')+'" data-wk="'+i+'">'+(i===0?"This week":"Next week")+'</button>').join("")+'</div><div class="cap">'+esc(w.label)+'</div>';
   const es=Object.keys(w.teams).map(t=>({t:t,d:w.teams[t],n:w.teams[t].filter(x=>x).length})).sort((a,b)=>b.n-a.n||a.t.localeCompare(b.t));
-  h+='<div class="tm"><span></span><div class="wk hd">'+["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(x=>'<span>'+x+'</span>').join("")+'</div><span></span></div>';
+  const hdr='<div class="tm hd"><span></span><div class="wk hd">'+["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(x=>'<span>'+x+'</span>').join("")+'</div></div>';
   let last=-1;
   es.forEach(e=>{
-    if(e.n!==last){h+='<div class="gh">'+e.n+' game'+(e.n===1?"":"s")+'</div>';last=e.n;}
-    h+='<div class="tm"><span class="tn">'+esc(e.t)+'</span><div class="wk">'+e.d.map(x=>'<div class="dc"><span class="dot'+(x?(x.s===2?' d':' u'):'')+'"></span><small>'+(x?(x.h?"":"@")+esc(x.o):"")+'</small>'+(x&&x.s===2&&x.p?'<small class="sc '+(x.w?'w':'l')+'">'+(x.w?'W':'L')+' '+esc(x.p)+'</small>':'')+'</div>').join("")+'</div><b class="gc">'+e.n+'</b></div>';
+    if(e.n!==last){h+='<div class="gh grp">'+e.n+' game'+(e.n===1?"":"s")+'</div>'+hdr;last=e.n;}
+    h+='<div class="tm"><span class="tn">'+esc(e.t)+'</span><div class="wk">'+e.d.map(x=>'<div class="dc"><span class="dot'+(x?(x.s===2?' d':' u'):'')+'"></span><small>'+(x?(x.h?"":"@")+esc(x.o):"")+'</small>'+(x&&x.s===2&&x.p?'<small class="sc '+(x.w?'w':'l')+'">'+(x.w?'W':'L')+' '+esc(x.p)+'</small>':'')+'</div>').join("")+'</div></div>';
   });
   const max=es[0].n, top=new Set(es.filter(e=>e.n===max).map(e=>e.t));
   const ps=pool().filter(r=>top.has(tName(r))).sort((a,b)=>b.overall-a.overall).slice(0,8);
-  h+='<div class="gh" style="margin-top:8px">Best players on '+max+'-game teams</div>'+ps.map(prow).join("");
+  h+='<div class="gh grp" style="margin-top:10px;border-top:1px solid var(--line)">Best players on '+max+'-game teams</div>'+ps.map(prow).join("");
   return h+'<div class="cap">Orange dots are upcoming games, gray dots are games already played. “@” means an away game. Finished games show W or L and the final score, with the team’s own score first.</div></section>';
 }
 function frow(x){
