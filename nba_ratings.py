@@ -50,6 +50,37 @@ CATEGORIES = [
 ]
 
 
+# More stats people can switch on in the "Custom" panel. Same shape as above plus
+# emoji, title and a group name.  (key, label, column, lower_is_better, format, emoji, title, group)
+EXTRA_STATS = [
+    ("tpm", "3PM", "FG3M", False, "1d", "🏹", "3-pointers made per game", "Shooting"),
+    ("tpa", "3PA", "FG3A", False, "1d", "🚀", "3-pointers attempted per game", "Shooting"),
+    ("ftm", "FTM", "FTM", False, "1d", "✔️", "Free throws made per game", "Shooting"),
+    ("fta", "FTA", "FTA", False, "1d", "🙌", "Free throws attempted per game", "Shooting"),
+    ("fgm", "FGM", "FGM", False, "1d", "🏀", "Field goals made per game", "Shooting"),
+    ("fga", "FGA", "FGA", False, "1d", "📤", "Field goals attempted per game", "Shooting"),
+    ("ts", "TS%", "TS", False, "pct", "💎", "True shooting %", "Shooting"),
+    ("efg", "eFG%", "EFG", False, "pct", "📈", "Effective field goal %", "Shooting"),
+    ("oreb", "OREB", "OREB", False, "1d", "🔁", "Offensive rebounds per game", "Rebounding"),
+    ("dreb", "DREB", "DREB", False, "1d", "🧤", "Defensive rebounds per game", "Rebounding"),
+    ("pra", "PRA", "PRA", False, "1d", "⭐", "Points + rebounds + assists per game", "Scoring"),
+    ("atr", "A/TO", "ATR", False, "2d", "🧠", "Assist-to-turnover ratio", "Playmaking"),
+    ("stk", "STK", "STK", False, "1d", "🕸️", "Steals + blocks per game", "Defense"),
+    ("pf", "PF", "PF", True, "1d", "🚩", "Fewest fouls per game", "Defense"),
+    ("min", "MPG", "MIN", False, "1d", "⏱️", "Minutes per game", "Other"),
+    ("dd", "DD", "DD", False, "int", "✌️", "Double-doubles (season total)", "Other"),
+    ("td", "TD", "TD", False, "int", "🤯", "Triple-doubles (season total)", "Other"),
+]
+STAT_GROUP = {"ppg": "Scoring", "rpg": "Rebounding", "apg": "Playmaking", "spg": "Defense",
+              "bpg": "Defense", "fgp": "Shooting", "ftp": "Shooting", "tpp": "Shooting",
+              "dur": "Other", "tov": "Playmaking"}
+ALL_STATS = CATEGORIES + [(k, l, c, lo, kd) for k, l, c, lo, kd, *_ in EXTRA_STATS]
+
+
+def _decimals(kind):
+    return 3 if kind == "pct" else 0 if kind == "int" else 2 if kind == "2d" else 1
+
+
 # Emoji + full title shown on the front page for each category.
 CATEGORY_INFO = {
     "ppg": ("🔥", "Points per game"),
@@ -165,6 +196,21 @@ def compute_ratings(players, teams, qualified_only=False):
     df["TEAM_GP"] = df["TEAM_ID"].map(team_gp)
     df["DUR"] = (df["GP"] / df["TEAM_GP"]).clip(upper=1.0)
 
+    # Extra stats: "made" counts come from ESPN, or attempts x percentage if missing.
+    for made, att, pct in (("FGM", "FGA", "FG_PCT"), ("FG3M", "FG3A", "FG3_PCT"), ("FTM", "FTA", "FT_PCT")):
+        if made not in df:
+            df[made] = np.nan
+        df[made] = df[made].fillna(df[att] * df[pct].fillna(0))
+    for col in ("OREB", "DREB", "PF", "DD", "TD"):
+        if col not in df:
+            df[col] = np.nan
+    df["PRA"] = df["PTS"] + df["REB"] + df["AST"]
+    df["STK"] = df["STL"] + df["BLK"]
+    df["ATR"] = df["AST"] / df["TOV"].clip(lower=0.1)
+    denom = 2 * (df["FGA"] + 0.44 * df["FTA"])
+    df["TS"] = (df["PTS"] / denom).where(denom > 0)
+    df["EFG"] = ((df["FGM"] + 0.5 * df["FG3M"]) / df["FGA"]).where(df["FGA"] > 0)
+
     # Qualified view: remove low-games / low-minutes players before ranking,
     # so everyone left is ranked only against other qualified players.
     if qualified_only:
@@ -176,11 +222,12 @@ def compute_ratings(players, teams, qualified_only=False):
         if qualified_only:
             no_data = no_data | (df[att] < MIN_ATTEMPTS_PER_GAME[pct])
         df.loc[no_data, pct] = np.nan
+    if qualified_only:   # same shot minimum for the shooting-efficiency stats
+        df.loc[df["FGA"] < MIN_ATTEMPTS_PER_GAME["FG_PCT"], ["TS", "EFG"]] = np.nan
 
     # Round to the precision shown on NBA.com so ties match what you see.
-    for _, _, col, _, kind in CATEGORIES:
-        df[col] = df[col].round(3 if kind == "pct" else 1)
-    df["MIN"] = df["MIN"].round(1)
+    for _, _, col, _, kind in ALL_STATS:
+        df[col] = df[col].round(_decimals(kind))
 
     # Score each category, then total (equal weights, max 100).
     for key, _, col, lower, _ in CATEGORIES:
@@ -204,7 +251,7 @@ def compute_ratings(players, teams, qualified_only=False):
             "overall": int(r["OVERALL"]),
             "s": {c[0]: int(r["s_" + c[0]]) for c in CATEGORIES},
             "v": {c[0]: fmt(r[c[2]], c[4]) for c in CATEGORIES},
-            "n": {c[0]: (None if pd.isna(r[c[2]]) else float(r[c[2]])) for c in CATEGORIES},
+            "n": {c[0]: (None if pd.isna(r[c[2]]) else float(r[c[2]])) for c in ALL_STATS},
         })
     return rows
 
@@ -226,6 +273,17 @@ ESPN_STATS = {
     "FT_PCT": ["freeThrowPct"],
     "FG3A": ["avgThreePointFieldGoalsAttempted"],
     "FG3_PCT": ["threePointFieldGoalPct", "threePointPct"],
+}
+# Optional: used when ESPN's feed has them, otherwise worked out or left blank.
+ESPN_OPTIONAL = {
+    "FGM": ["avgFieldGoalsMade"],
+    "FG3M": ["avgThreePointFieldGoalsMade"],
+    "FTM": ["avgFreeThrowsMade"],
+    "OREB": ["avgOffensiveRebounds"],
+    "DREB": ["avgDefensiveRebounds"],
+    "PF": ["avgFouls", "avgPersonalFouls"],
+    "DD": ["doubleDouble", "doubleDoubles"],
+    "TD": ["tripleDouble", "tripleDoubles"],
 }
 ESPN_URL = ("https://site.web.api.espn.com/apis/common/v3/sports/"
             "basketball/nba/statistics/byathlete")
@@ -376,6 +434,8 @@ def parse_espn(pages):
                              f"Stat names it does have: {sorted(available)}")
         keys[col] = found
 
+    opt_keys = {col: next((c.lower() for c in names if c.lower() in available), None)
+                for col, names in ESPN_OPTIONAL.items()}
     rows = []
     for page in pages:
         top = _page_names(page)
@@ -399,6 +459,8 @@ def parse_espn(pages):
             }
             for col, key in keys.items():
                 row[col] = pd.to_numeric(flat.get(key), errors="coerce")
+            for col, key in opt_keys.items():
+                row[col] = pd.to_numeric(flat.get(key), errors="coerce") if key else np.nan
             rows.append(row)
 
     df = pd.DataFrame(rows).dropna(subset=["PLAYER_NAME", "GP"])
@@ -448,6 +510,9 @@ def fetch_espn(season=None):
     if not pages:
         raise ValueError("ESPN returned no players")
     players, teams = parse_espn(pages)
+    if season is None:
+        print("Extra stats found in ESPN's feed:",
+              [c for c in ESPN_OPTIONAL if players[c].notna().any()] or "none (they will be worked out)")
     players = fill_positions(players)
     return players, apply_team_games(players, teams, season)
 
@@ -474,9 +539,9 @@ def fetch_nba():
 ESPN_SITE = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 HISTORY_FILE = "history.json"   # nightly ratings snapshots (for rank-change arrows)
 GAMES_FILE = "games.json"       # saved box scores (for last-5-games form)
-HISTORY_KEEP_DAYS = 21
+HISTORY_KEEP_DAYS = 9
 GAMES_KEEP_DAYS = 35
-BACKFILL_DAYS = 30
+BACKFILL_DAYS = 80
 FORM_GAMES = 5
 FORM_KEYS = ["ppg", "rpg", "apg", "spg", "bpg", "tov"]
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; nba-ratings)"}
@@ -694,7 +759,7 @@ def update_games(today, cache):
 
     games = load_json_file(GAMES_FILE, {}).get("games", {})
     start = today - timedelta(days=BACKFILL_DAYS)
-    if games:
+    if games and Path(TALLY_FILE).exists():   # first time with double-doubles: look back over the whole season
         start = max(start, date.fromisoformat(max(g["d"] for g in games.values())) - timedelta(days=1))
     new, first_error, day = 0, None, start
     while day <= today:
@@ -711,6 +776,7 @@ def update_games(today, cache):
                 new += 1
             time.sleep(0.25)
         day += timedelta(days=1)
+    update_tally(games)   # count every saved game before the old ones are dropped
     cutoff = (today - timedelta(days=GAMES_KEEP_DAYS)).isoformat()
     games = {k: v for k, v in games.items() if v["d"] >= cutoff}
     save_json_file(GAMES_FILE, {"games": games})
@@ -718,6 +784,39 @@ def update_games(today, cache):
     if first_error:
         print("Warning: some box scores could not be read:", first_error)
     return games
+
+
+TALLY_FILE = "dd.json"
+
+
+def update_tally(games):
+    """Count double-doubles and triple-doubles from saved box scores (each game once)."""
+    data = load_json_file(TALLY_FILE, {})
+    seen, tally = set(data.get("seen", [])), data.get("t", {})
+    for gid, g in games.items():
+        if gid in seen:
+            continue
+        for pid, line in g["p"].items():
+            _mins, pts, reb, ast, stl, blk, _tov = line
+            big = sum(1 for v in (pts, reb, ast, stl, blk) if v >= 10)
+            rec = tally.setdefault(pid, [0, 0])
+            if big >= 2:
+                rec[0] += 1
+            if big >= 3:
+                rec[1] += 1
+        seen.add(gid)
+    save_json_file(TALLY_FILE, {"seen": sorted(seen), "t": tally})
+    return tally
+
+
+def attach_double_doubles(df, tally):
+    """Add DD / TD season totals, unless ESPN's feed already has them."""
+    if ("DD" in df and df["DD"].notna().mean() >= 0.5) or not tally:
+        return df
+    df = df.copy()
+    df["DD"] = df["PLAYER_ID"].map(lambda i: tally.get(str(i), [0, 0])[0]).astype(float)
+    df["TD"] = df["PLAYER_ID"].map(lambda i: tally.get(str(i), [0, 0])[1]).astype(float)
+    return df
 
 
 def compute_form(rows_q, games):
@@ -747,8 +846,10 @@ def compute_form(rows_q, games):
 
 def make_snapshot(rows_all, rows_q):
     q = {r["id"]: r["overall"] for r in rows_q}
-    return {r["id"]: [r["overall"], q.get(r["id"])] + [r["n"][c[0]] for c in CATEGORIES]
-            for r in rows_all}
+    keys = [c[0] for c in ALL_STATS]
+    return {"k": keys,
+            "p": {r["id"]: [r["overall"], q.get(r["id"])] + [r["n"].get(k) for k in keys]
+                  for r in rows_all}}
 
 
 def update_history(snapshot, today):
@@ -769,7 +870,10 @@ def pick_baseline(hist, today, back=7):
     ok = [k for k in older if k <= target]
     key = ok[-1] if ok else older[0]
     d = date.fromisoformat(key)
-    return {"days": (today - d).days, "date": f"{d:%b} {d.day}", "p": hist[key]}
+    snap = hist[key]
+    if "p" not in snap:   # older file: only the first ten stats were saved
+        snap = {"k": [c[0] for c in CATEGORIES], "p": snap}
+    return {"days": (today - d).days, "date": f"{d:%b} {d.day}", "k": snap["k"], "p": snap["p"]}
 
 
 PREV_FILE = "prev_season.json"
@@ -780,7 +884,7 @@ def build_previous_season():
     if DATA_SOURCE != "espn":
         return None
     year = ESPN_SEASON - 1
-    settings = [MIN_GP_PCT, MIN_MPG, MIN_ATTEMPTS_PER_GAME, [c[0] for c in CATEGORIES], 2]
+    settings = [MIN_GP_PCT, MIN_MPG, MIN_ATTEMPTS_PER_GAME, [c[0] for c in ALL_STATS], 3]
     cached = load_json_file(PREV_FILE, None)
     if cached and cached.get("season") == year and cached.get("settings") == settings:
         return cached
@@ -792,9 +896,9 @@ def build_previous_season():
     return out
 
 
-def build_extras(rows_all, rows_q, today):
+def build_extras(rows_all, rows_q, today, cache=None, games=None):
     ex = {"inj": {}, "sched": [], "form": {}, "base": None}
-    cache = {}
+    cache = {} if cache is None else cache
     try:
         recs = fetch_injuries()
         ex["inj"] = match_injuries(recs, rows_all)
@@ -810,7 +914,7 @@ def build_extras(rows_all, rows_q, today):
     except Exception as e:
         print("Warning: could not load the schedule:", e)
     try:
-        games = update_games(today, cache)
+        games = update_games(today, cache) if games is None else games
         ex["form"] = compute_form(rows_q, games)
         print(f"Hot/cold form calculated for {len(ex['form'])} players")
     except Exception as e:
@@ -841,6 +945,8 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 .top{background:linear-gradient(135deg,#1a2550,#0d1330 55%,#6b2a0f);color:#fff;padding:18px 14px 14px}
 .top-in{max-width:1100px;margin:0 auto}
 .top h1{margin:0;font-size:23px}
+.th{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+@media (max-width:420px){.top h1{font-size:20px}}
 .top .sub{color:#c7cbe0;font-size:12px;margin:3px 0 12px}
 .ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .ctl input[type=search]{flex:1;min-width:170px;max-width:340px;padding:9px 12px;border-radius:10px;border:0;background:rgba(255,255,255,.15);color:#fff;font-size:16px;outline:none}
@@ -852,6 +958,39 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 .tg input{accent-color:var(--accent);width:17px;height:17px}
 .ssel select{background:rgba(255,255,255,.15);color:#fff;border:0;border-radius:10px;padding:7px 10px;font-size:14px;font-weight:600;margin-bottom:10px}
 .ssel option{color:#000}
+.wb{border:0;background:rgba(255,255,255,.15);color:#fff;padding:6px 11px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.wb.on{background:var(--accent)}
+.pre{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+.gh2{font-weight:700;font-size:13px;color:var(--accent2);margin:12px 0 6px}
+.up{display:inline-flex;align-items:center;gap:2px}
+.del{border:0;background:var(--head);color:var(--fg);width:22px;height:22px;border-radius:50%;cursor:pointer;font-size:13px;line-height:1}
+.svr{display:flex;gap:8px;margin:0 0 4px}
+.svr input{flex:1;min-width:0;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font-size:16px;outline:none}
+.svr .addbtn{flex:none;width:auto;margin:0;padding:7px 16px}
+details.cd{border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin:10px 0}
+details.cd summary{cursor:pointer;font-weight:700;font-size:14px}
+.cgp{margin:10px 0 4px}
+.cgp>b{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+.ck{display:grid;grid-template-columns:auto 72px 1fr;gap:8px;align-items:center;padding:4px 0;font-size:14px}
+.ck small{color:var(--muted);font-size:11.5px}
+.ck input{width:18px;height:18px;accent-color:var(--accent)}
+.wr{display:grid;grid-template-columns:auto 1fr auto 46px;grid-template-areas:"lab lab lab lab" "mn sl mx val";gap:2px 6px;align-items:start;padding:8px 0;font-size:14px;border-top:1px solid var(--line)}
+.wr:first-of-type{border-top:0}
+.wl{grid-area:lab;font-weight:600}
+.mn{grid-area:mn}.sl{grid-area:sl;min-width:0}.mx{grid-area:mx}
+.mm{border:1px solid var(--line);background:none;color:var(--fg);font-size:11px;font-weight:700;padding:0 7px;border-radius:8px;cursor:pointer;height:24px}
+.mm:hover{background:var(--head)}
+.sl input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:24px;margin:0;background:transparent}
+.sl input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:var(--head)}
+.sl input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;box-sizing:border-box;width:18px;height:18px;border-radius:50%;background:var(--accent);border:2px solid var(--card);box-shadow:0 0 0 1px var(--accent);margin-top:-6px}
+.sl input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:var(--head)}
+.sl input[type=range]::-moz-range-thumb{box-sizing:border-box;width:18px;height:18px;border-radius:50%;background:var(--accent);border:2px solid var(--card);box-shadow:0 0 0 1px var(--accent)}
+.tk{display:flex;justify-content:space-between;padding:0 9px}
+.tk span{width:0;display:flex;flex-direction:column;align-items:center;font-size:9px;color:var(--muted);white-space:nowrap}
+.tk i{width:1px;height:5px;background:var(--muted);opacity:.6}
+.wvb{grid-area:val;display:flex;flex-direction:column;align-items:flex-end;line-height:1.1}
+.wv{font-size:20px;font-weight:800;color:var(--accent2)}
+.wp{font-size:11px;color:var(--muted)}
 .pos{display:flex;flex-wrap:nowrap;align-items:center;gap:4px;margin-top:10px;overflow-x:auto}
 .pos .pl{color:#c7cbe0;font-size:11.5px;flex:none}
 .pp{position:relative;cursor:pointer;flex:none}
@@ -1007,7 +1146,7 @@ td.o{font-weight:700}
 .inj{margin:-4px 0 10px;font-size:13px;color:var(--muted)}
 </style></head><body>
 <div class="top"><div class="top-in">
-<h1>🏀 NBA Player Ratings</h1>
+<div class="th"><h1>🏀 NBA Player Ratings</h1><button id="wbtn" class="wb" type="button">⚙️ Custom</button></div>
 <div class="sub" id="sub">Season __SEASON__ · updated __UPDATED__</div>
 <div class="ssel" id="sselwrap" style="display:none"><select id="ssel" aria-label="Season"></select></div>
 <div class="ctl">
@@ -1029,8 +1168,15 @@ td.o{font-weight:700}
 </div>
 <div class="foot"><div id="rules"></div><div id="mvnote"></div><div>Scores are 1 to 10 in each of 10 categories (10 = league leader). Overall is the sum, out of 100. MPG is shown for context only. Tap any player for their full breakdown, and tap ☆ to add them to My team. With a position selected, “Re-rank within selected positions” scores each player only against others at that position.</div></div>
 <div class="ov" id="ov"><div class="sheet" id="sheet"></div></div>
+<div class="ov" id="wov"><div class="sheet" id="wsheet"></div></div>
 <script>
-const CATS=__CATS__, DATA=__DATA__, TEAMS=__TEAMS__;
+const STATS=__STATS__, DATA=__DATA__, TEAMS=__TEAMS__;
+// a STATS / CATS entry: [key, label, lowerIsBetter, emoji, title, format, shownByDefault, group]
+const DEFAULT_SEL=STATS.filter(s=>s[6]).map(s=>s[0]);
+let SEL=loadSel(), CATS=[];
+function loadSel(){try{const a=JSON.parse(localStorage.getItem("nba_cats_v1")||"null");if(Array.isArray(a)){const ok=STATS.map(s=>s[0]).filter(k=>a.includes(k));if(ok.length>=3)return ok;}}catch(e){}return DEFAULT_SEL.slice();}
+function applyCats(){CATS=STATS.filter(s=>SEL.includes(s[0]));}
+applyCats();
 let season="cur", ALL=DATA.cur.all, QUAL=DATA.cur.q;
 const isCur=()=>season==="cur";
 const ESPNP="https://a.espncdn.com/i/headshots/nba/players/full/";
@@ -1040,10 +1186,41 @@ try{trend=localStorage.getItem("nba_trend_v1")||"d1";}catch(e){}
 function pickBase(){BASE=BASES?(BASES[trend]||BASES.d7||BASES.d1||null):null;}
 pickBase();
 const agoText=d=>d===1?"yesterday":d+" days ago";
-// CATS entry: [key, label, lowerIsBetter, emoji, title]
 const $=id=>document.getElementById(id);
 let view="L", key="overall", dir=-1;
-const cur=()=>$("qt").checked?QUAL:ALL;
+/* ---------- category weights (importance 0-10 per stat -> percentages) ---------- */
+const WK="nba_w_v2";
+function defaultW(){const w={};STATS.forEach(s=>{w[s[0]]=5;});return w;}
+function loadW(){
+  const w=defaultW();
+  try{
+    const a=JSON.parse(localStorage.getItem(WK)||"null");
+    if(a&&typeof a==="object"&&!Array.isArray(a)){Object.keys(a).forEach(k=>{if(k in w&&typeof a[k]==="number")w[k]=a[k];});return w;}
+    const old=JSON.parse(localStorage.getItem("nba_w_v1")||"null");   // weights saved by an earlier version: the first ten stats, in order
+    if(Array.isArray(old)&&old.length===DEFAULT_SEL.length)DEFAULT_SEL.forEach((k,i)=>{if(typeof old[i]==="number")w[k]=old[i];});
+  }catch(e){}
+  return w;
+}
+let W=loadW();
+function saveW(){try{localStorage.setItem(WK,JSON.stringify(W));}catch(e){}}
+function saveSel(){try{localStorage.setItem("nba_cats_v1",JSON.stringify(SEL));}catch(e){}}
+const wSum=()=>CATS.reduce((a,c)=>a+W[c[0]],0);
+const sameSet=(a,b)=>a.length===b.length&&a.every(k=>b.includes(k));
+const catsCustom=()=>!sameSet(SEL,DEFAULT_SEL);
+const wUneven=()=>wSum()>0&&CATS.some(c=>W[c[0]]!==W[CATS[0][0]]);
+const wActive=()=>wUneven()||catsCustom();   // "a custom setup is on"
+const wPct=()=>{const t=wSum();return CATS.map(c=>t>0?W[c[0]]/t:1/CATS.length);};
+function wsum(sc){const p=wPct();let t=0;CATS.forEach((c,i)=>{t+=sc[c[0]]*p[i]*10;});return Math.round(t*10)/10;}
+const fmtv=(c,v)=>{if(v===null||v===undefined)return "—";const f=c[5];return f==="pct"?(v*100).toFixed(1)+"%":f==="int"?String(Math.round(v)):f==="2d"?v.toFixed(2):v.toFixed(1);};
+/* every player scored against the whole pool (qualified or all) using the chosen stats + weights */
+let _dc={};
+function dataset(kind){
+  const base=kind==="q"?QUAL:ALL, k=season+"|"+kind+"|"+CATS.map(c=>c[0]+W[c[0]]).join(",");
+  if(!_dc[kind]||_dc[kind].k!==k)_dc[kind]={k:k,v:rescore(base)};
+  return _dc[kind].v;
+}
+function cur(){return dataset($("qt").checked?"q":"a");}
+
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const norm=s=>String(s).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
 const hue=sc=>"hsl("+((sc-1)*13)+",70%,45%)";
@@ -1066,7 +1243,7 @@ function denseScores(vals,lower){
 }
 function rescore(rows){
   const sc=CATS.map(c=>denseScores(rows.map(r=>r.n[c[0]]),c[2]));
-  return rows.map((r,i)=>{const s={};let t=0;CATS.forEach((c,j)=>{s[c[0]]=sc[j][i];t+=sc[j][i];});return Object.assign({},r,{s:s,overall:t});});
+  return rows.map((r,i)=>{const s={},v={};CATS.forEach((c,j)=>{s[c[0]]=sc[j][i];v[c[0]]=fmtv(c,r.n[c[0]]);});return Object.assign({},r,{s:s,v:v,overall:wsum(s)});});
 }
 function pool(){
   const s=posSel(), rows=cur();
@@ -1124,21 +1301,24 @@ function ibt(s){const t=String(s||"").toLowerCase();return t.includes("out")?"OU
 function ib(id){const i=isCur()?INJ[id]:null;if(!i||!i.s)return "";const t=ibt(i.s);return '<span class="ib'+(t==="OUT"?" out":"")+'" title="'+esc(i.s+(i.d?": "+i.d:""))+'">'+t+'</span>';}
 /* when scores are re-ranked within a position, last time's overall is re-ranked the same way so the comparison is like for like */
 function relBaseOverall(rows){
+  const idx=CATS.map(c=>BASE.k.indexOf(c[0]));
+  if(idx.some(i=>i<0))return {};   // last time's numbers don't include every chosen stat
   const have=rows.filter(r=>BASE.p[r.id]);
-  const sc=CATS.map((c,j)=>denseScores(have.map(r=>BASE.p[r.id][2+j]),c[2])), m={};
-  have.forEach((r,i)=>{m[r.id]=sc.reduce((t,a)=>t+a[i],0);});
+  const sc=CATS.map((c,j)=>denseScores(have.map(r=>BASE.p[r.id][2+idx[j]]),c[2])), m={};
+  have.forEach((r,i)=>{const s={};CATS.forEach((c,j)=>{s[c[0]]=sc[j][i];});m[r.id]=wsum(s);});
   return m;
 }
 function overallDelta(r){
   if(!BASE||!isCur())return null;
   const b=BASE.p[r.id];if(!b)return null;
-  const bo=rel()?relBaseOverall(pool())[r.id]:($("qt").checked?b[1]:b[0]);
-  return(bo===null||bo===undefined)?null:r.overall-bo;
+  const bo=(rel()||wActive())?relBaseOverall(rel()?pool():cur())[r.id]:($("qt").checked?b[1]:b[0]);
+  return(bo===null||bo===undefined)?null:Math.round((r.overall-bo)*10)/10;
 }
 function moves(rows,k,lower){
   if(!BASE||!isCur())return null;
-  const idx=k==="overall"?-1:CATS.findIndex(c=>c[0]===k), both=[];
-  const rb=(k==="overall"&&rel())?relBaseOverall(rows):null;
+  const idx=k==="overall"?-1:BASE.k.indexOf(k), both=[];
+  if(k!=="overall"&&idx<0)return null;
+  const rb=(k==="overall"&&(rel()||wActive()))?relBaseOverall(rel()?rows:cur()):null;
   rows.forEach(r=>{
     const b=BASE.p[r.id];if(!b)return;
     const cv=k==="overall"?r.overall:r.n[k], bv=k==="overall"?(rb?rb[r.id]:($("qt").checked?b[1]:b[0])):b[2+idx];
@@ -1156,7 +1336,7 @@ function mvh(mv,id){
 
 /* ---------- Leaders (front page) ---------- */
 function topList(rows,k,lower){
-  return rows.filter(r=>r.n[k]!==null).sort((a,b)=>{
+  return rows.filter(r=>r.n[k]!=null).sort((a,b)=>{
     if(a.s[k]!==b.s[k])return b.s[k]-a.s[k];
     if(a.n[k]!==b.n[k])return lower?a.n[k]-b.n[k]:b.n[k]-a.n[k];
     return b.overall-a.overall;
@@ -1174,9 +1354,23 @@ function card(em,title,list,val,k,cls,mv){
 }
 function lbar(){
   let h="";
+  if(wActive())h+='<div class="fbar">⚙️ Your custom setup is on: the overall rating uses the stats and weights you chose, and the leaderboards below show your chosen stats.</div>';
   if(posSel().length)h+='<div class="fbar">Showing '+posNames().toLowerCase()+' only · '+(rel()?'scores re-ranked among them':'scores still compare with the whole league')+'</div>';
   if(BASES&&isCur())h+='<span>Trend arrows:</span>'+["d1","d7"].filter(k=>BASES[k]).map(k=>'<button class="pill'+(trend===k?' on':'')+'" data-tr="'+k+'">'+(k==="d1"?"vs yesterday":"vs last week")+'</button>').join("");
   return h?'<div class="lbar">'+h+'</div>':"";
+}
+let teamsAll=false;
+function teamCard(rows){
+  const g={};
+  rows.forEach(r=>{const t=tName(r),o=g[t]||(g[t]={t:t,n:0,s:0,a:r.team});o.n++;o.s+=r.overall;});
+  const list=Object.values(g).filter(o=>o.n>=2).map(o=>({t:o.t,n:o.n,a:o.a,m:Math.round(o.s/o.n*10)/10})).sort((x,y)=>y.m-x.m||y.n-x.n);
+  if(!list.length)return "";
+  const shown=teamsAll?list:list.slice(0,10), f=shown[0];
+  let h='<section class="card"><div class="ch"><span class="em">🏆</span><span class="ttl">Team ranking</span></div><div class="cap" style="margin:0 14px 4px">Average overall rating of each team’s players</div>';
+  h+='<div class="lead" data-team="'+esc(f.t)+'"><span class="av ini" style="--s:64px">'+esc(f.a)+'</span><div class="nm"><b>'+esc(f.t)+'</b><small>'+f.n+' players</small></div><div class="big">'+f.m+'<small>/100</small></div></div>';
+  shown.slice(1).forEach((o,i)=>{h+='<div class="row" data-team="'+esc(o.t)+'"><span class="rk">'+(i+2)+'</span><span class="av ini" style="--s:36px">'+esc(o.a)+'</span><span class="nm">'+esc(o.t)+'<small>'+o.n+' players</small></span><span class="val">'+o.m+'<small>/100</small></span></div>';});
+  if(list.length>10)h+='<button class="cf" data-tall="1">'+(teamsAll?"Show top 10 only":"Show all "+list.length+" teams")+'</button>';
+  return h+'</section>';
 }
 function renderLeaders(){
   const rows=pool(), q=$("q").value.trim();
@@ -1185,7 +1379,7 @@ function renderLeaders(){
   else if(q){h=searchHTML(q);}
   else{
     const overall=[...rows].sort((a,b)=>b.overall-a.overall).slice(0,10);
-    h=lbar()+'<div class="grid">'+card("👑","Overall rating",overall,r=>r.overall+'<small>/100</small>',"overall","first",moves(rows,"overall",false));
+    h=lbar()+'<div class="grid">'+card("👑",wActive()?"Overall (custom)":"Overall rating",overall,r=>r.overall+'<small>/100</small>',"overall","first",moves(rows,"overall",false))+teamCard(rows);
     CATS.forEach(c=>{h+=card(c[3],c[4],topList(rows,c[0],c[2]),r=>r.v[c[0]],c[0],"",moves(rows,c[0],c[2]));});
     h+='</div>';
   }
@@ -1193,20 +1387,21 @@ function renderLeaders(){
 }
 
 /* ---------- table rows (Full list + My team) ---------- */
-const COLW=[46,270,64,48,52,44,92,...CATS.map(()=>60)];
+const getColW=()=>[46,270,64,48,52,44,92,...CATS.map(()=>60)];
+const colGroup=()=>getColW().map(w=>'<col style="width:'+w+'px">').join("");
+const tableW=()=>getColW().reduce((a,b)=>a+b,0);
 function layoutTable(){
-  const cg=COLW.map(w=>'<col style="width:'+w+'px">').join(""), tw=COLW.reduce((a,b)=>a+b,0)+"px";
-  ["cg1","cg2"].forEach(id=>{$(id).innerHTML=cg;});
-  ["t1","t2"].forEach(id=>{$(id).style.minWidth=tw;$(id).style.width="100%";});
-  $("bwrap").addEventListener("scroll",()=>{$("hwrap").scrollLeft=$("bwrap").scrollLeft;});
+  ["cg1","cg2"].forEach(id=>{$(id).innerHTML=colGroup();});
+  ["t1","t2"].forEach(id=>{$(id).style.minWidth=tableW()+"px";$(id).style.width="100%";});
 }
-const cols=[["name","Player"],["team","Team"],["pos","Pos"],["mpg","MPG"],["gp","GP"],["overall","Overall"],...CATS.map(c=>[c[0],c[1]])];
+function wireTableScroll(){$("bwrap").addEventListener("scroll",()=>{$("hwrap").scrollLeft=$("bwrap").scrollLeft;});}
+const getCols=()=>[["name","Player"],["team","Team"],["pos","Pos"],["mpg","MPG"],["gp","GP"],["overall","Overall"],...CATS.map(c=>[c[0],c[1]])];
 function val(r,k){return k in r.s?r.s[k]:(k==="mpg"?parseFloat(r.mpg):r[k]);}
 function cmp(a,b){
   if(key in a.s){
     if(a.s[key]!==b.s[key])return a.s[key]-b.s[key];
     const lower=CATS.find(c=>c[0]===key)[2],x=a.n[key],y=b.n[key];
-    if(x===null&&y===null)return 0;if(x===null)return -1;if(y===null)return 1;
+    if(x==null&&y==null)return 0;if(x==null)return -1;if(y==null)return 1;
     return lower?y-x:x-y;
   }
   const x=val(a,key),y=val(b,key);return x>y?1:x<y?-1:0;
@@ -1216,7 +1411,7 @@ function trow(r){
     CATS.map(c=>'<td class="sc"><b style="background:'+hue(r.s[c[0]]).replace("hsl","hsla").replace(")",",.35)")+'">'+r.s[c[0]]+'</b><small>'+r.v[c[0]]+'</small></td>').join("")+'</tr>';
 }
 function renderTable(){
-  $("h").innerHTML='<tr><th class="pk"></th>'+cols.map(c=>'<th data-k="'+c[0]+'">'+c[1]+(c[0]===key?(dir<0?" ▼":" ▲"):"")+"</th>").join("")+"</tr>";
+  $("h").innerHTML='<tr><th class="pk"></th>'+getCols().map(c=>'<th data-k="'+c[0]+'">'+c[1]+(c[0]===key?(dir<0?" ▼":" ▲"):"")+"</th>").join("")+"</tr>";
   document.querySelectorAll("#h th[data-k]").forEach(t=>t.onclick=()=>{const k=t.dataset.k;if(k===key)dir=-dir;else{key=k;dir=(k==="name"||k==="team")?1:-1;}renderTable();});
   const nq=norm($("q").value.trim());
   const rows=pool().filter(r=>tText(r).includes(nq)).sort((a,b)=>cmp(a,b)*dir);
@@ -1269,10 +1464,9 @@ function summary(mine){
     CATS.map(c=>{const a=avg(c);return '<div class="br avg"><span>'+c[3]+' '+c[1]+'</span><span class="bt"><i style="width:'+(a*10)+'%;background:'+hue(a)+'"></i></span><span class="bs">'+a.toFixed(1)+'</span></div>';}).join("")+'</div></section>';
   return h;
 }
-const TW=COLW.reduce((a,b)=>a+b,0), CGH=COLW.map(w=>'<col style="width:'+w+'px">').join("");
 function shell(id,head,body){
-  const st='style="min-width:'+TW+'px;width:100%"';
-  return '<div class="sh"><div class="hwrap" id="'+id+'h"><table class="ft" '+st+'><colgroup>'+CGH+'</colgroup><thead>'+head+'</thead></table></div><div class="bwrap" id="'+id+'b"><table class="ft" '+st+'><colgroup>'+CGH+'</colgroup><tbody>'+body+'</tbody></table></div></div>';
+  const st='style="min-width:'+tableW()+'px;width:100%"';
+  return '<div class="sh"><div class="hwrap" id="'+id+'h"><table class="ft" '+st+'><colgroup>'+colGroup()+'</colgroup><thead>'+head+'</thead></table></div><div class="bwrap" id="'+id+'b"><table class="ft" '+st+'><colgroup>'+colGroup()+'</colgroup><tbody>'+body+'</tbody></table></div></div>';
 }
 function syncShell(id){const b=$(id+"b");if(b)b.addEventListener("scroll",()=>{$(id+"h").scrollLeft=b.scrollLeft;});}
 function renderTeam(){
@@ -1288,7 +1482,7 @@ function renderTeam(){
   }else{
     if(mine.length)h+=summary(mine);
     if(mine.length){
-      h+=shell("mt",'<tr><th class="pk"></th>'+cols.map(c=>'<th>'+c[1]+'</th>').join("")+'</tr>',mine.map(trow).join(""));
+      h+=shell("mt",'<tr><th class="pk"></th>'+getCols().map(c=>'<th>'+c[1]+'</th>').join("")+'</tr>',mine.map(trow).join(""));
     }
     if(missing)h+='<p class="note">'+missing+' saved player'+(missing===1?" isn’t":"s aren’t")+' rated in this view (not qualified, or not in the data). Turn off “Qualified players only” to see them.</p>';
     h+='<p class="note">Your team is saved in this browser on this device. Ratings update every night.</p>';
@@ -1299,7 +1493,7 @@ function renderTeam(){
 
 /* ---------- Research tab: compare, games this week, hot and cold ---------- */
 let cmpIds=[], wk=0;
-const findRow=id=>cur().find(r=>r.id===id)||ALL.find(r=>r.id===id);
+const findRow=id=>cur().find(r=>r.id===id)||dataset("a").find(r=>r.id===id);
 function addCmp(id){if(cmpIds.includes(id))return;if(cmpIds.length>=3)cmpIds.shift();cmpIds.push(id);}
 function cmpSearch(v){
   const box=$("cres"),nq=norm(v.trim());
@@ -1310,7 +1504,7 @@ function cmpSearch(v){
 }
 function cmpTable(rows){
   const n=rows.length, maxO=Math.max(...rows.map(r=>r.overall));
-  const best=c=>{const v=rows.filter(r=>r.n[c[0]]!==null).map(r=>r.n[c[0]]);return v.length?(c[2]?Math.min(...v):Math.max(...v)):null;};
+  const best=c=>{const v=rows.filter(r=>r.n[c[0]]!=null).map(r=>r.n[c[0]]);return v.length?(c[2]?Math.min(...v):Math.max(...v)):null;};
   let h='<div class="cg" style="grid-template-columns:92px repeat('+n+',1fr)"><div></div>';
   rows.forEach(r=>{h+='<div class="cc"><button class="rmv" data-rm="'+r.id+'" aria-label="Remove">×</button>'+av(r,56)+'<b>'+esc(r.name)+'</b><small>'+sub(r)+'</small>'+ib(r.id)+'</div>';});
   h+='<div class="cl">Overall</div>';
@@ -1371,7 +1565,7 @@ function renderResearch(){
 
 /* ---------- Player sheet ---------- */
 function openPlayer(id){
-  const r=pool().find(x=>x.id===id)||cur().find(x=>x.id===id)||ALL.find(x=>x.id===id);
+  const r=pool().find(x=>x.id===id)||cur().find(x=>x.id===id)||dataset("a").find(x=>x.id===id);
   if(!r)return;
   let h='<button class="x" id="cl" aria-label="Close">×</button>';
   const od=overallDelta(r);
@@ -1382,10 +1576,61 @@ function openPlayer(id){
   h+='<div class="abr"><button class="addbtn" data-st="'+r.id+'">'+(inTeam(r.id)?"★ On my team":"☆ Add to my team")+'</button><button class="addbtn" data-cmpopen="'+r.id+'">⚖️ Compare players</button></div>';
   CATS.forEach(c=>{const sc=r.s[c[0]];
     h+='<div class="br"><span>'+c[3]+' '+c[1]+'</span><span class="bt"><i style="width:'+(sc*10)+'%;background:'+hue(sc)+'"></i></span><span class="bs">'+sc+'</span><span class="bv">'+r.v[c[0]]+'</span></div>';});
-  h+='<p class="note">'+(rel()?"Ranked only among "+posNames().toLowerCase()+($("qt").checked?" (qualified players).":"."):$("qt").checked?"Ranked among qualified players only.":"Ranked against all players.")+'</p>';
+  h+='<p class="note">'+(rel()?"Ranked only among "+posNames().toLowerCase()+($("qt").checked?" (qualified players).":"."):$("qt").checked?"Ranked among qualified players only.":"Ranked against all players.")+(wActive()?" Overall uses your custom setup.":"")+'</p>';
   $("sheet").innerHTML=h;$("ov").classList.add("show");
 }
 const closeSheet=()=>$("ov").classList.remove("show");
+
+/* ---------- custom panel: categories, weights, saved setups ---------- */
+const BUILTIN=[["Equal (default)",{}],["Scoring",{ppg:10,rpg:4,apg:4,spg:3,bpg:3,fgp:7,ftp:6,tpp:7,dur:5,tov:3}],["Big man",{ppg:6,rpg:10,apg:2,spg:3,bpg:10,fgp:8,ftp:2,tpp:1,dur:5,tov:4}],["Guard",{ppg:7,rpg:2,apg:10,spg:9,bpg:1,fgp:4,ftp:6,tpp:9,dur:5,tov:6}],["Defense",{ppg:3,rpg:8,apg:4,spg:10,bpg:10,fgp:3,ftp:1,tpp:1,dur:5,tov:5}],["Punt FT%",{ftp:0}]];
+const UPK="nba_upresets_v1";
+function loadUP(){try{const a=JSON.parse(localStorage.getItem(UPK)||"[]");return Array.isArray(a)?a.filter(x=>x&&x.n&&Array.isArray(x.sel)&&x.w):[];}catch(e){return [];}}
+let UP=loadUP(), catOpen=false;
+function saveUP(){try{localStorage.setItem(UPK,JSON.stringify(UP));}catch(e){}}
+const available=k=>ALL.some(r=>r.n[k]!=null);
+function afterSetup(){
+  applyCats();layoutTable();updateWbtn();
+  if(!["name","team","pos","mpg","gp","overall"].includes(key)&&!CATS.some(c=>c[0]===key)){key="overall";dir=-1;}
+  renderWeights();draw();
+}
+function setSetup(sel,w){
+  SEL=STATS.map(s=>s[0]).filter(k=>sel.includes(k));
+  if(SEL.length<3)SEL=DEFAULT_SEL.slice();
+  W=Object.assign(defaultW(),w||{});
+  saveSel();saveW();afterSetup();
+}
+function savePreset(){
+  const name=$("pname").value.trim(), msg=$("pmsg");
+  if(!name){msg.textContent="Type a name first.";return;}
+  UP=UP.filter(x=>x.n.toLowerCase()!==name.toLowerCase());
+  if(UP.length>=12){msg.textContent="You can keep up to 12 saved setups. Delete one first.";return;}
+  const w={};CATS.forEach(c=>{w[c[0]]=W[c[0]];});
+  UP.push({n:name,sel:SEL.slice(),w:w});saveUP();renderWeights();
+  $("pmsg").textContent="Saved “"+name+"”. Tap it any time to use it again.";
+}
+function wNote(){$("wnote").textContent=wSum()===0?"All sliders are at 0, so equal weights are used.":wActive()?"Your custom setup is on.":"Default setup: the standard 10 stats, equal weights.";}
+function updateWeightUI(){const p=wPct();CATS.forEach((c,i)=>{const v=$("wv"+c[0]),e=$("wp"+c[0]);if(v)v.textContent=W[c[0]];if(e)e.textContent="("+Math.round(p[i]*100)+"%)";});}
+function updateWbtn(){$("wbtn").classList.toggle("on",wActive());$("wbtn").textContent=wActive()?"⚙️ Custom · on":"⚙️ Custom";}
+function renderWeights(){
+  const box=$("wsheet"), keep=box.scrollTop;
+  let h='<button class="x" id="wcl" aria-label="Close">×</button><div class="shn">⚙️ Custom category weights</div><p class="note" style="margin:4px 0 10px">Build your own overall rating: choose which stats count, then set how much each one matters (0 = ignore it, 10 = most important). The overall stays out of 100.</p>';
+  h+='<div class="gh2">Presets</div><div class="pre">'+BUILTIN.map((x,i)=>'<button class="pill" data-pre="'+i+'">'+x[0]+'</button>').join("")+UP.map((u,i)=>'<span class="up"><button class="pill" data-up="'+i+'">'+esc(u.n)+'</button><button class="del" data-ud="'+i+'" aria-label="Delete '+esc(u.n)+'">×</button></span>').join("")+'</div>';
+  h+='<div class="svr"><input id="pname" maxlength="30" placeholder="Name this setup to save it"><button class="addbtn" id="psave">Save</button></div><p class="note" id="pmsg" style="margin:4px 0 0"></p>';
+  h+='<details class="cd" id="catd"'+(catOpen?' open':'')+'><summary>Categories: '+SEL.length+' selected</summary><p class="note" style="margin:6px 0">Pick at least 3. Each stat you pick gets its own leaderboard and counts toward the overall rating.</p>';
+  [...new Set(STATS.map(s=>s[7]))].forEach(g=>{
+    h+='<div class="cgp"><b>'+g+'</b>'+STATS.filter(s=>s[7]===g).map(s=>{const on=SEL.includes(s[0]),av=available(s[0]);return '<label class="ck"><input type="checkbox" data-ck="'+s[0]+'"'+(on?' checked':'')+((av||on)?'':' disabled')+'><span>'+s[3]+' '+s[1]+'</span><small>'+esc(s[4])+(av?'':' (not available yet)')+'</small></label>';}).join("")+'</div>';
+  });
+  h+='<button class="addbtn" id="catreset" style="margin-top:8px">Back to the default 10 stats</button></details>';
+  h+='<div class="gh2">Weights</div>';
+  const ticks='<div class="tk">'+[0,1,2,3,4,5,6,7,8,9,10].map(n=>'<span><i></i>'+n+'</span>').join("")+'</div>';
+  CATS.forEach(c=>{const k=c[0];h+='<div class="wr"><div class="wl">'+c[3]+' '+c[1]+'</div><button class="mm mn" data-wm="'+k+':0" aria-label="Set '+esc(c[4])+' to the minimum">min</button><div class="sl"><input type="range" min="0" max="10" step="1" value="'+W[k]+'" data-wkey="'+k+'" aria-label="'+esc(c[4])+' importance">'+ticks+'</div><button class="mm mx" data-wm="'+k+':10" aria-label="Set '+esc(c[4])+' to the maximum">max</button><div class="wvb"><span class="wv" id="wv'+k+'"></span><span class="wp" id="wp'+k+'"></span></div></div>';});
+  h+='<p class="note" id="wnote"></p><div class="abr"><button class="addbtn" id="wreset">Reset weights to equal</button><button class="addbtn" id="wdone">Done</button></div>';
+  box.innerHTML=h;updateWeightUI();wNote();box.scrollTop=keep;
+}
+const openWeights=()=>{renderWeights();$("wov").classList.add("show");};
+const closeWeights=()=>$("wov").classList.remove("show");
+let _raf=0;
+const redraw=()=>{if(_raf)return;_raf=requestAnimationFrame(()=>{_raf=0;draw();});};
 
 /* ---------- wiring ---------- */
 const HOLD={L:"Search a player or team",M:"Search to add players (name or team)",R:"",T:"Filter by player or team"};
@@ -1406,6 +1651,23 @@ function draw(){
   if(view==="L")renderLeaders();else if(view==="M")renderTeam();else if(view==="R")renderResearch();else renderTable();
 }
 document.addEventListener("click",e=>{
+  if(e.target.closest("#wbtn")){openWeights();return;}
+  const wm=e.target.closest("[data-wm]");
+  if(wm){const a=wm.dataset.wm.split(":"),r=document.querySelector('[data-wkey="'+a[0]+'"]');W[a[0]]=+a[1];if(r)r.value=a[1];saveW();updateWeightUI();wNote();updateWbtn();redraw();return;}
+  const pr=e.target.closest("[data-pre]");
+  if(pr){setSetup(DEFAULT_SEL,BUILTIN[+pr.dataset.pre][1]);return;}
+  const upb=e.target.closest("[data-up]");
+  if(upb){const u=UP[+upb.dataset.up];if(u)setSetup(u.sel,u.w);return;}
+  const udb=e.target.closest("[data-ud]");
+  if(udb){UP.splice(+udb.dataset.ud,1);saveUP();renderWeights();return;}
+  if(e.target.id==="psave"){savePreset();return;}
+  if(e.target.id==="catreset"){setSetup(DEFAULT_SEL,W);return;}
+  if(e.target.id==="wreset"){W=defaultW();saveW();afterSetup();return;}
+  if(e.target.id==="wov"||e.target.id==="wcl"||e.target.id==="wdone"){closeWeights();return;}
+  const tmb=e.target.closest("[data-team]");
+  if(tmb){$("q").value=tmb.dataset.team;setView("L");window.scrollTo(0,0);return;}
+  if(e.target.closest("[data-tall]")){teamsAll=!teamsAll;draw();return;}
+  if(e.target.id==="wov"||e.target.id==="wcl"||e.target.id==="wdone"){closeWeights();return;}
   const rmv=e.target.closest("[data-rm]");
   if(rmv){cmpIds=cmpIds.filter(x=>x!==rmv.dataset.rm);renderResearch();return;}
   const ca=e.target.closest("[data-cmp]");
@@ -1430,8 +1692,21 @@ document.addEventListener("click",e=>{
   const el=e.target.closest("[data-id]");
   if(el)openPlayer(el.dataset.id);
 });
-document.addEventListener("keydown",e=>{if(e.key==="Escape")closeSheet();});
-layoutTable();
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeSheet();closeWeights();}});
+document.addEventListener("input",e=>{
+  const k=e.target.dataset&&e.target.dataset.wkey;
+  if(k===undefined)return;
+  W[k]=+e.target.value;saveW();updateWeightUI();wNote();updateWbtn();redraw();
+});
+document.addEventListener("change",e=>{
+  const ck=e.target.dataset&&e.target.dataset.ck;
+  if(ck===undefined)return;
+  const next=e.target.checked?SEL.concat(ck):SEL.filter(k=>k!==ck);
+  if(next.length<3){e.target.checked=true;$("wnote").textContent="Keep at least 3 stats selected.";return;}
+  SEL=STATS.map(s=>s[0]).filter(k=>next.includes(k));saveSel();afterSetup();
+});
+document.addEventListener("toggle",e=>{if(e.target.id==="catd")catOpen=e.target.open;},true);
+layoutTable();wireTableScroll();
 $("q").oninput=draw;$("qt").onchange=draw;
 restorePos();document.querySelectorAll(".pos input,#prk").forEach(i=>{i.onchange=()=>{savePos();draw();};});
 $("tabL").onclick=()=>setView("L");$("tabM").onclick=()=>setView("M");$("tabR").onclick=()=>setView("R");$("tabT").onclick=()=>setView("T");
@@ -1452,22 +1727,38 @@ if(DATA.prev){
   $("ssel").onchange=()=>setSeason($("ssel").value);
 }
 updateNote();
+updateWbtn();
 draw();
 </script></body></html>"""
 
 
+def _slim(rows):
+    """The page works out scores itself, so it only needs the raw numbers."""
+    return [{k: v for k, v in r.items() if k not in ("s", "v", "overall")} for r in rows]
+
+
+def stats_for_page():
+    out = []
+    for key, label, _col, lower, kind in CATEGORIES:
+        emoji, title = CATEGORY_INFO[key]
+        out.append([key, label, lower, emoji, title, kind, 1, STAT_GROUP[key]])
+    for key, label, _col, lower, kind, emoji, title, group in EXTRA_STATS:
+        out.append([key, label, lower, emoji, title, kind, 0, group])
+    return out
+
+
 def write_html(rows_all, rows_q, path="index.html", extras=None, prev=None):
     ex = {"inj": {}, "sched": [], "form": {}, "base": None, **(extras or {})}
-    data = {"cur": {"label": SEASON, "all": rows_all, "q": rows_q}, "prev": None}
+    data = {"cur": {"label": SEASON, "all": _slim(rows_all), "q": _slim(rows_q)}, "prev": None}
     if prev:
-        data["prev"] = {"label": prev["label"], "all": prev["all"], "q": prev["q"]}
-    cats = [[c[0], c[1], c[3], *CATEGORY_INFO[c[0]]] for c in CATEGORIES]
+        data["prev"] = {"label": prev["label"], "all": _slim(prev["all"]), "q": _slim(prev["q"])}
+    cats = stats_for_page()
     a = MIN_ATTEMPTS_PER_GAME
     rules = (f"Qualified = at least {MIN_GP_PCT:.0%} of team games and {MIN_MPG:g} MPG. "
              f"Shooting % needs {a['FG_PCT']:g} FGA, {a['FT_PCT']:g} FTA, "
              f"{a['FG3_PCT']:g} 3PA per game.")
     html = (HTML.replace("__SEASON__", SEASON)
-                .replace("__CATS__", json.dumps(cats))
+                .replace("__STATS__", json.dumps(cats))
                 .replace("__RULES__", rules)
                 .replace("__TEAMS__", json.dumps(TEAM_LOOKUP))
                 .replace("__INJ__", json.dumps(ex["inj"]))
@@ -1485,13 +1776,19 @@ if __name__ == "__main__":
         players_df, teams_df = fetch()
     except Exception as e:  # NBA.com often blocks cloud IPs; ESPN feed can change
         sys.exit(f"Could not get the stats: {e}")
+    today = datetime.now(ZoneInfo("America/Toronto")).date()
+    cache, games = {}, None
+    try:
+        games = update_games(today, cache)
+        players_df = attach_double_doubles(players_df, load_json_file(TALLY_FILE, {}).get("t", {}))
+    except Exception as e:
+        print("Warning: could not build double-double totals:", e)
     rows_all = compute_ratings(players_df, teams_df)
     rows_q = compute_ratings(players_df, teams_df, qualified_only=True)
     counts = {}
     for r in rows_all:
         counts[r["g"] or "none"] = counts.get(r["g"] or "none", 0) + 1
     print("Positions found:", counts)
-    today = datetime.now(ZoneInfo("America/Toronto")).date()
     prev = None
     try:
         prev = build_previous_season()
@@ -1499,4 +1796,4 @@ if __name__ == "__main__":
             print(f"Last season ({prev['label']}): {len(prev['all'])} players rated")
     except Exception as e:
         print("Warning: could not load last season (the season menu will be hidden):", e)
-    write_html(rows_all, rows_q, extras=build_extras(rows_all, rows_q, today), prev=prev)
+    write_html(rows_all, rows_q, extras=build_extras(rows_all, rows_q, today, cache, games), prev=prev)
