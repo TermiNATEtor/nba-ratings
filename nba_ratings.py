@@ -117,7 +117,9 @@ _TEAMS = [
     ("UTA", "Utah Jazz", "", ("UTAH",)), ("WAS", "Washington Wizards", "", ("WSH",)),
 ]
 TEAM_ABBR = {name: canon for canon, name, _extra, _others in _TEAMS}   # "Boston Celtics" -> "BOS"
-TEAM_LOOKUP = {code: {"n": name, "a": extra}
+# ESPN's logo files are named by its own short codes (gs, ny, sa, no, utah, wsh).
+_LOGO = {"GSW": "gs", "NYK": "ny", "SAS": "sa", "NOP": "no", "UTA": "utah", "WAS": "wsh"}
+TEAM_LOOKUP = {code: {"n": name, "a": extra, "l": _LOGO.get(canon, canon.lower())}
                for canon, name, extra, others in _TEAMS
                for code in (canon, *others)}
 
@@ -279,8 +281,8 @@ ESPN_OPTIONAL = {
     "FGM": ["avgFieldGoalsMade"],
     "FG3M": ["avgThreePointFieldGoalsMade"],
     "FTM": ["avgFreeThrowsMade"],
-    "OREB": ["avgOffensiveRebounds"],
-    "DREB": ["avgDefensiveRebounds"],
+    "OREB": ["avgOffensiveRebounds", "avgOffRebounds", "avgOffReb", "offensiveReboundsPerGame"],
+    "DREB": ["avgDefensiveRebounds", "avgDefRebounds", "avgDefReb", "defensiveReboundsPerGame"],
     "PF": ["avgFouls", "avgPersonalFouls"],
     "DD": ["doubleDouble", "doubleDoubles"],
     "TD": ["tripleDouble", "tripleDoubles"],
@@ -436,6 +438,8 @@ def parse_espn(pages):
 
     opt_keys = {col: next((c.lower() for c in names if c.lower() in available), None)
                 for col, names in ESPN_OPTIONAL.items()}
+    used = {c.lower() for names in ESPN_STATS.values() for c in names} | {k for k in opt_keys.values() if k}
+    parse_espn.unused = sorted(available - used)
     rows = []
     for page in pages:
         top = _page_names(page)
@@ -513,6 +517,7 @@ def fetch_espn(season=None):
     if season is None:
         print("Extra stats found in ESPN's feed:",
               [c for c in ESPN_OPTIONAL if players[c].notna().any()] or "none (they will be worked out)")
+        print("Other stat names ESPN offers (not used yet):", getattr(parse_espn, "unused", []))
     players = fill_positions(players)
     return players, apply_team_games(players, teams, season)
 
@@ -1030,6 +1035,13 @@ details.cd summary{cursor:pointer;font-weight:700;font-size:14px}
 .st.on{color:#f59e0b}
 .av{width:var(--s);height:var(--s);position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;flex:none;font-weight:700;color:var(--muted);font-size:calc(var(--s)*.34)}
 .av.ini{background:var(--head);border-radius:50%}
+.av.tl img{object-fit:contain;object-position:center}
+.th2{gap:8px}
+.th2 .ttl{white-space:normal;line-height:1.15;font-size:15px}
+.cnt2{font-size:11px;font-weight:500;color:var(--muted);flex:none}
+.avg2{margin-left:auto;flex:none;font-weight:700;font-size:14px;white-space:nowrap}
+.avg2 small{color:var(--muted);font-weight:600;font-size:11px}
+.stsp{width:32px;flex:none}
 .av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center bottom}
 .wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:14px}
 .wrap.mt{margin-top:12px}
@@ -1265,6 +1277,12 @@ function toggleTeam(id){team=inTeam(id)?team.filter(x=>x!==id):[...team,id];save
 const star=id=>'<button class="st'+(inTeam(id)?' on':'')+'" data-st="'+id+'" aria-label="Add or remove from my team">'+(inTeam(id)?'★':'☆')+'</button>';
 
 function avFail(img){const s=img.parentNode;s.classList.add("ini");s.textContent=s.dataset.ini;}
+const LOGO="https://a.espncdn.com/i/teamlogos/nba/500/";
+function tlogo(code,size){
+  const i=TEAMS[String(code).toUpperCase()]||{}, ini=esc(String(code).toUpperCase());
+  if(!i.l)return '<span class="av ini" style="--s:'+size+'px">'+ini+'</span>';
+  return '<span class="av tl" data-ini="'+ini+'" style="--s:'+size+'px"><img loading="lazy" alt="" src="'+LOGO+i.l+'.png" onerror="avFail(this)"></span>';
+}
 function av(r,size){
   const ini=esc(r.name.split(" ").map(w=>w[0]).slice(0,2).join(""));
   return '<span class="av" data-ini="'+ini+'" style="--s:'+size+'px"><img loading="lazy" alt="" src="'+esc(r.photo||(ESPNP+r.id+".png"))+'" onerror="avFail(this)"></span>';
@@ -1286,7 +1304,8 @@ function searchHTML(q){
     mt.forEach(n=>{
       const list=teams[n].slice().sort((a,b)=>b.overall-a.overall);
       list.forEach(r=>shown.add(r.id));
-      h+='<section class="card"><div class="ch">🏀 '+esc(n)+'<span class="ct">'+list.length+' players</span></div>'+list.map(prow).join("")+'</section>';
+      const avg=Math.round(list.reduce((t,r)=>t+r.overall,0)/list.length*10)/10;
+      h+='<section class="card"><div class="ch th2"><span class="cnt2">'+list.length+' players</span>'+tlogo(list[0].team,28)+'<span class="ttl">'+esc(n)+'</span><span class="avg2"><small>avg</small> '+avg+'<small>/100</small></span><span class="stsp"></span></div>'+list.map(prow).join("")+'</section>';
     });
   }
   const cand=byTeam?rows.filter(r=>!shown.has(r.id)&&norm(r.name).includes(nq)):rows.filter(r=>tText(r).includes(nq));
@@ -1366,9 +1385,9 @@ function teamCard(rows){
   const list=Object.values(g).filter(o=>o.n>=2).map(o=>({t:o.t,n:o.n,a:o.a,m:Math.round(o.s/o.n*10)/10})).sort((x,y)=>y.m-x.m||y.n-x.n);
   if(!list.length)return "";
   const shown=teamsAll?list:list.slice(0,10), f=shown[0];
-  let h='<section class="card"><div class="ch"><span class="em">🏆</span><span class="ttl">Team ranking</span></div><div class="cap" style="margin:0 14px 4px">Average overall rating of each team’s players</div>';
-  h+='<div class="lead" data-team="'+esc(f.t)+'"><span class="av ini" style="--s:64px">'+esc(f.a)+'</span><div class="nm"><b>'+esc(f.t)+'</b><small>'+f.n+' players</small></div><div class="big">'+f.m+'<small>/100</small></div></div>';
-  shown.slice(1).forEach((o,i)=>{h+='<div class="row" data-team="'+esc(o.t)+'"><span class="rk">'+(i+2)+'</span><span class="av ini" style="--s:36px">'+esc(o.a)+'</span><span class="nm">'+esc(o.t)+'<small>'+o.n+' players</small></span><span class="val">'+o.m+'<small>/100</small></span></div>';});
+  let h='<section class="card"><div class="ch"><span class="em">🏆</span><span class="ttl">Team ranking</span><span class="ct">avg player rating</span></div>';
+  h+='<div class="lead" data-team="'+esc(f.t)+'">'+tlogo(f.a,64)+'<div class="nm"><b>'+esc(f.t)+'</b><small>'+f.n+' players</small></div><div class="big">'+f.m+'<small>/100</small></div></div>';
+  shown.slice(1).forEach((o,i)=>{h+='<div class="row" data-team="'+esc(o.t)+'"><span class="rk">'+(i+2)+'</span>'+tlogo(o.a,36)+'<span class="nm">'+esc(o.t)+'<small>'+o.n+' players</small></span><span class="val">'+o.m+'<small>/100</small></span></div>';});
   if(list.length>10)h+='<button class="cf" data-tall="1">'+(teamsAll?"Show top 10 only":"Show all "+list.length+" teams")+'</button>';
   return h+'</section>';
 }
@@ -1737,13 +1756,16 @@ def _slim(rows):
     return [{k: v for k, v in r.items() if k not in ("s", "v", "overall")} for r in rows]
 
 
-def stats_for_page():
+def stats_for_page(*row_sets):
+    """The default stats, plus any extra stat that actually has numbers in the data."""
+    have = {k for rows in row_sets for r in rows for k, v in r["n"].items() if v is not None}
     out = []
     for key, label, _col, lower, kind in CATEGORIES:
         emoji, title = CATEGORY_INFO[key]
         out.append([key, label, lower, emoji, title, kind, 1, STAT_GROUP[key]])
     for key, label, _col, lower, kind, emoji, title, group in EXTRA_STATS:
-        out.append([key, label, lower, emoji, title, kind, 0, group])
+        if key in have:
+            out.append([key, label, lower, emoji, title, kind, 0, group])
     return out
 
 
@@ -1752,7 +1774,7 @@ def write_html(rows_all, rows_q, path="index.html", extras=None, prev=None):
     data = {"cur": {"label": SEASON, "all": _slim(rows_all), "q": _slim(rows_q)}, "prev": None}
     if prev:
         data["prev"] = {"label": prev["label"], "all": _slim(prev["all"]), "q": _slim(prev["q"])}
-    cats = stats_for_page()
+    cats = stats_for_page(rows_all, prev["all"] if prev else [])
     a = MIN_ATTEMPTS_PER_GAME
     rules = (f"Qualified = at least {MIN_GP_PCT:.0%} of team games and {MIN_MPG:g} MPG. "
              f"Shooting % needs {a['FG_PCT']:g} FGA, {a['FT_PCT']:g} FTA, "
