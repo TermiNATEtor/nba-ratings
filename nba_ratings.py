@@ -1039,8 +1039,8 @@ details.cd summary{cursor:pointer;font-weight:700;font-size:14px}
 .th2{gap:8px}
 .th2 .ttl{white-space:normal;line-height:1.15;font-size:15px}
 .cnt2{font-size:11px;font-weight:500;color:var(--muted);flex:none}
-.avg2{margin-left:auto;flex:none;font-weight:700;font-size:14px;white-space:nowrap}
-.avg2 small{color:var(--muted);font-weight:600;font-size:11px}
+.avg2{margin-left:auto;flex:none;font-weight:700;font-size:15px;color:var(--accent2);white-space:nowrap}
+.avg2 small{color:var(--muted);font-weight:600}
 .stsp{width:32px;flex:none}
 .av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center bottom}
 .wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:14px}
@@ -1053,9 +1053,9 @@ table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%
 th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:center;white-space:nowrap}
 th{background:var(--head);position:sticky;top:0;cursor:pointer;user-select:none;z-index:2}
 .static-th th,#myteam th{cursor:default}
-th:first-child,td:first-child{position:sticky;left:0;background:var(--card);z-index:1;padding:4px 6px;border-right:1px solid var(--line)}
-th:first-child{background:var(--head);z-index:3}
-td.nmc,th:nth-child(2){text-align:left;min-width:170px}
+th:first-child,td:first-child{padding:4px 6px}
+td.nmc,th:nth-child(2){position:sticky;left:0;z-index:1;text-align:left;background:var(--card);border-right:1px solid var(--line)}
+th:nth-child(2){background:var(--head);z-index:3}
 td.nmc{overflow:hidden}
 .nmc .pc{min-width:0}
 .nmt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
@@ -1386,7 +1386,7 @@ function teamCard(rows){
   if(!list.length)return "";
   const shown=teamsAll?list:list.slice(0,10), f=shown[0];
   let h='<section class="card"><div class="ch"><span class="em">🏆</span><span class="ttl">Team ranking</span><span class="ct">avg player rating</span></div>';
-  h+='<div class="lead" data-team="'+esc(f.t)+'">'+tlogo(f.a,64)+'<div class="nm"><b>'+esc(f.t)+'</b><small>'+f.n+' players</small></div><div class="big">'+f.m+'<small>/100</small></div></div>';
+  h+='<div class="lead" data-team="'+esc(f.t)+'">'+tlogo(f.a,72)+'<div class="nm"><b>'+esc(f.t)+'</b><small>'+f.n+' players</small></div><div class="big">'+f.m+'<small>/100</small></div></div>';
   shown.slice(1).forEach((o,i)=>{h+='<div class="row" data-team="'+esc(o.t)+'"><span class="rk">'+(i+2)+'</span>'+tlogo(o.a,36)+'<span class="nm">'+esc(o.t)+'<small>'+o.n+' players</small></span><span class="val">'+o.m+'<small>/100</small></span></div>';});
   if(list.length>10)h+='<button class="cf" data-tall="1">'+(teamsAll?"Show top 10 only":"Show all "+list.length+" teams")+'</button>';
   return h+'</section>';
@@ -1406,7 +1406,7 @@ function renderLeaders(){
 }
 
 /* ---------- table rows (Full list + My team) ---------- */
-const getColW=()=>[46,270,64,48,52,44,92,...CATS.map(()=>60)];
+const getColW=()=>[46,window.innerWidth<700?130:270,64,48,52,44,92,...CATS.map(()=>60)];
 const colGroup=()=>getColW().map(w=>'<col style="width:'+w+'px">').join("");
 const tableW=()=>getColW().reduce((a,b)=>a+b,0);
 function layoutTable(){
@@ -1726,6 +1726,8 @@ document.addEventListener("change",e=>{
 });
 document.addEventListener("toggle",e=>{if(e.target.id==="catd")catOpen=e.target.open;},true);
 layoutTable();wireTableScroll();
+let _lw=window.innerWidth;
+window.addEventListener("resize",()=>{if(window.innerWidth!==_lw){_lw=window.innerWidth;layoutTable();draw();}});
 $("q").oninput=draw;$("qt").onchange=draw;
 restorePos();document.querySelectorAll(".pos input,#prk").forEach(i=>{i.onchange=()=>{savePos();draw();};});
 $("tabL").onclick=()=>setView("L");$("tabM").onclick=()=>setView("M");$("tabR").onclick=()=>setView("R");$("tabT").onclick=()=>setView("T");
