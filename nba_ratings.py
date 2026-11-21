@@ -1009,7 +1009,8 @@ details.cd summary{cursor:pointer;font-weight:700;font-size:14px}
 .pp input:checked+span{background:var(--accent);color:#fff}
 .pp input:focus-visible+span{border-color:#fff}
 .main.wide{max-width:1500px}
-.main{max-width:1100px;margin:0 auto;padding:12px}
+.main{max-width:1100px;margin:0 auto;padding:12px;position:relative;touch-action:pan-y pinch-zoom}
+.bwrap,.hwrap,.pos{touch-action:pan-x pan-y}
 .hide{display:none}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
 .stack{display:grid;gap:12px}
@@ -1657,11 +1658,14 @@ const closeWeights=()=>$("wov").classList.remove("show");
 let _raf=0;
 const redraw=()=>{if(_raf)return;_raf=requestAnimationFrame(()=>{_raf=0;draw();});};
 
-/* ---------- swipe left / right to move between the tabs (phones) ---------- */
+/* ---------- swipe between the tabs: the pages follow your finger (phones) ---------- */
+function renderView(v){if(v==="L")renderLeaders();else if(v==="M")renderTeam();else if(v==="R")renderResearch();else renderTable();}
 (function(){
-  const order=["L","M","R","T"];
-  let sx=0,sy=0,st=0,tg=null,multi=false;
-  function canScroll(el,dx){   // is something under the finger that can still scroll sideways in this direction?
+  const order=["L","M","R","T"], pid={L:"leaders",M:"myteam",R:"research",T:"tablewrap"};
+  const stage=document.querySelector(".main");
+  let g=null, animating=false;
+  const W=()=>stage.clientWidth||window.innerWidth;
+  function canScroll(el,dx){   // can something under the finger still scroll sideways this way?
     const hw=el.closest&&el.closest(".hwrap");
     if(hw&&hw.nextElementSibling)el=hw.nextElementSibling;
     for(;el&&el!==document.body;el=el.parentElement){
@@ -1673,20 +1677,67 @@ const redraw=()=>{if(_raf)return;_raf=requestAnimationFrame(()=>{_raf=0;draw();}
     }
     return false;
   }
-  document.addEventListener("touchstart",e=>{multi=e.touches.length>1;const t=e.touches[0];sx=t.clientX;sy=t.clientY;st=Date.now();tg=e.target;},{passive:true});
-  document.addEventListener("touchend",e=>{
-    const el=tg;tg=null;
-    if(multi||!el)return;
-    const t=e.changedTouches[0],dx=t.clientX-sx,dy=t.clientY-sy;
-    if(Date.now()-st>900||Math.abs(dx)<70||Math.abs(dy)>Math.abs(dx)*0.6)return;
-    if(sx<24||sx>window.innerWidth-24)return;           // leave the phone's own edge swipes alone
-    if(document.querySelector(".ov.show"))return;       // not while a panel is open
-    if(el.closest&&el.closest("input,select,textarea,details"))return;
-    if(canScroll(el,dx))return;
-    const j=order.indexOf(view)+(dx<0?1:-1);
-    if(j<0||j>=order.length)return;
-    setView(order[j]);window.scrollTo(0,0);
+  function prepare(dir){   // draw the neighbouring page and park it just off-screen
+    const j=order.indexOf(view)+dir;
+    if(j<0||j>=order.length)return null;
+    const nv=order[j];renderView(nv);
+    const el=$(pid[nv]), r=$(pid[view]).getBoundingClientRect(), sr=stage.getBoundingClientRect();
+    el.classList.remove("hide");
+    el.style.cssText="position:absolute;left:"+Math.round(r.left-sr.left)+"px;width:"+Math.round(r.width)+"px;top:"+g.top+"px;transition:none;will-change:transform";
+    return {v:nv,el:el};
+  }
+  function apply(dx){
+    $(pid[view]).style.transform="translateX("+dx+"px)";
+    if(g.nb)g.nb.el.style.transform="translateX("+(dx+g.dir*W())+"px)";
+  }
+  function finish(st,commit){
+    g=null;animating=true;
+    const cEl=$(pid[view]), w=W(), ease="transform 240ms cubic-bezier(.2,.8,.2,1)";
+    cEl.style.transition=ease;if(st.nb)st.nb.el.style.transition=ease;
+    if(commit&&st.nb){cEl.style.transform="translateX("+(-st.dir*w)+"px)";st.nb.el.style.transform="translateX(0px)";}
+    else{cEl.style.transform="translateX(0px)";if(st.nb)st.nb.el.style.transform="translateX("+(st.dir*w)+"px)";}
+    setTimeout(()=>{
+      stage.style.overflowX="";cEl.style.cssText="";
+      if(st.nb){
+        st.nb.el.style.cssText="";
+        if(commit){setView(st.nb.v);if(window.scrollY-stage.offsetTop>12)window.scrollTo(0,stage.offsetTop+12);}
+        else st.nb.el.classList.add("hide");
+      }
+      animating=false;
+    },260);
+  }
+  document.addEventListener("touchstart",e=>{
+    if(animating||e.touches.length>1){g=null;return;}
+    const t=e.touches[0];
+    g={sx:t.clientX,sy:t.clientY,el:e.target,mode:null,dir:0,nb:null,lx:t.clientX,lt:Date.now(),v:0,top:12};
   },{passive:true});
+  document.addEventListener("touchmove",e=>{
+    if(!g)return;
+    const t=e.touches[0], dx=t.clientX-g.sx, dy=t.clientY-g.sy;
+    if(g.mode===null){
+      if(Math.abs(dx)<10&&Math.abs(dy)<10)return;
+      if(Math.abs(dy)>Math.abs(dx)*0.8||g.sx<24||g.sx>window.innerWidth-24||document.querySelector(".ov.show")||(g.el.closest&&g.el.closest("input,select,textarea,details"))||canScroll(g.el,dx)){g.mode="no";return;}
+      g.mode="drag";g.top=Math.max(12,window.scrollY-stage.offsetTop);stage.style.overflowX="clip";
+    }
+    if(g.mode!=="drag")return;
+    if(e.cancelable)e.preventDefault();
+    const dir=dx<0?1:-1;
+    if(dir!==g.dir){
+      if(g.nb){g.nb.el.classList.add("hide");g.nb.el.style.cssText="";}
+      g.dir=dir;g.nb=prepare(dir);
+    }
+    const now=Date.now();g.v=(t.clientX-g.lx)/Math.max(1,now-g.lt);g.lx=t.clientX;g.lt=now;
+    apply(g.nb?dx:dx*0.3);
+  },{passive:false});
+  document.addEventListener("touchend",e=>{
+    if(!g)return;
+    const st=g;
+    if(st.mode!=="drag"){g=null;return;}
+    const dx=e.changedTouches[0].clientX-st.sx;
+    const flick=Math.abs(st.v)>0.5&&Math.sign(st.v)===Math.sign(dx);
+    finish(st,!!st.nb&&(Math.abs(dx)>W()*0.33||flick));
+  },{passive:true});
+  document.addEventListener("touchcancel",()=>{if(g&&g.mode==="drag")finish(g,false);else g=null;});
 })();
 
 /* ---------- wiring ---------- */
