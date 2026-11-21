@@ -954,7 +954,12 @@ body{margin:0;font:15px/1.35 system-ui,-apple-system,sans-serif;background:var(-
 @media (max-width:420px){.top h1{font-size:20px}}
 .top .sub{color:#c7cbe0;font-size:12px;margin:3px 0 12px}
 .ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
-.ctl input[type=search]{flex:1;min-width:170px;max-width:340px;padding:9px 12px;border-radius:10px;border:0;background:rgba(255,255,255,.15);color:#fff;font-size:16px;outline:none}
+.sw{position:relative;flex:1;min-width:170px;max-width:340px}
+.clr{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:26px;height:26px;border-radius:50%;border:0;background:rgba(255,255,255,.25);color:#fff;font-size:17px;line-height:1;cursor:pointer;padding:0}
+.cin .sw{max-width:none}
+.cin .clr{background:var(--head);color:var(--fg)}
+input[type=search]::-webkit-search-cancel-button,input[type=search]::-webkit-search-decoration{-webkit-appearance:none;appearance:none;display:none}
+.ctl input[type=search]{width:100%;padding:9px 38px 9px 12px;border-radius:10px;border:0;background:rgba(255,255,255,.15);color:#fff;font-size:16px;outline:none}
 .ctl input::placeholder{color:#c7cbe0}
 .seg{display:flex;gap:4px;background:rgba(255,255,255,.12);padding:3px;border-radius:12px}
 .seg button{border:0;background:none;color:#dfe2f3;padding:7px 9px;border-radius:9px;font-size:13.5px;font-weight:600;cursor:pointer}
@@ -1129,7 +1134,7 @@ td.o{font-weight:700}
 @media (max-width:560px){.tm{grid-template-columns:1fr;gap:8px;padding:12px 14px}.tm.hd{padding:0 14px 4px}.tm.hd>span{display:none}.tm .wk{grid-template-columns:repeat(7,1fr);gap:5px}.dc small.sc{font-size:9px;letter-spacing:-.3px}}
 .rs{display:grid;gap:12px}
 .cin{padding:6px 14px 8px}
-.cin input{width:100%;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font-size:16px;outline:none}
+.cin input{width:100%;padding:9px 38px 9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font-size:16px;outline:none}
 #cres .row{padding:6px 4px}
 .cg{display:grid;gap:6px 8px;padding:6px 14px 14px;align-items:center}
 .cc{text-align:center;position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:13px}
@@ -1162,7 +1167,7 @@ td.o{font-weight:700}
 <div class="sub" id="sub">Season __SEASON__ · updated __UPDATED__</div>
 <div class="ssel" id="sselwrap" style="display:none"><select id="ssel" aria-label="Season"></select></div>
 <div class="ctl">
-<input id="q" type="search" placeholder="Search a player or team">
+<div class="sw"><input id="q" type="search" placeholder="Search a player or team" autocomplete="off"><button id="qclr" class="clr" type="button" aria-label="Clear search" style="display:none">×</button></div>
 <div class="seg"><button id="tabL" class="on">Leaders</button><button id="tabM">My team</button><button id="tabR">Research</button><button id="tabT">Full list</button></div>
 <label class="tg"><input id="qt" type="checkbox" checked> Qualified players only <span id="cnt"></span></label>
 </div>
@@ -1515,6 +1520,7 @@ let cmpIds=[], wk=0;
 const findRow=id=>cur().find(r=>r.id===id)||dataset("a").find(r=>r.id===id);
 function addCmp(id){if(cmpIds.includes(id))return;if(cmpIds.length>=3)cmpIds.shift();cmpIds.push(id);}
 function cmpSearch(v){
+  const cb=document.querySelector('[data-clr="cq"]');if(cb)cb.style.display=v?"":"none";
   const box=$("cres"),nq=norm(v.trim());
   if(!box)return;
   if(!nq){box.innerHTML="";return;}
@@ -1575,7 +1581,7 @@ function formCard(){
 function renderResearch(){
   const prev=$("cq")?$("cq").value:"";
   const rows=cmpIds.map(findRow).filter(Boolean);
-  let c='<section class="card"><div class="ch"><span class="em">⚖️</span>Compare players<span class="ct">up to 3</span></div><div class="cin"><input id="cq" type="search" placeholder="Search a player to add" autocomplete="off"><div id="cres"></div></div>';
+  let c='<section class="card"><div class="ch"><span class="em">⚖️</span>Compare players<span class="ct">up to 3</span></div><div class="cin"><div class="sw"><input id="cq" type="search" placeholder="Search a player to add" autocomplete="off"><button class="clr" type="button" data-clr="cq" aria-label="Clear search" style="display:none">×</button></div><div id="cres"></div></div>';
   c+=rows.length?cmpTable(rows)+(rows.length<2?'<div class="cap">Add one more player to compare.</div>':''):'<div class="empty">Search above to pick two or three players.</div>';
   c+='</section>';
   $("research").innerHTML='<div class="rs">'+c+weekCard()+formCard()+'</div>';
@@ -1651,6 +1657,38 @@ const closeWeights=()=>$("wov").classList.remove("show");
 let _raf=0;
 const redraw=()=>{if(_raf)return;_raf=requestAnimationFrame(()=>{_raf=0;draw();});};
 
+/* ---------- swipe left / right to move between the tabs (phones) ---------- */
+(function(){
+  const order=["L","M","R","T"];
+  let sx=0,sy=0,st=0,tg=null,multi=false;
+  function canScroll(el,dx){   // is something under the finger that can still scroll sideways in this direction?
+    const hw=el.closest&&el.closest(".hwrap");
+    if(hw&&hw.nextElementSibling)el=hw.nextElementSibling;
+    for(;el&&el!==document.body;el=el.parentElement){
+      const o=getComputedStyle(el).overflowX;
+      if((o==="auto"||o==="scroll")&&el.scrollWidth>el.clientWidth+1){
+        if(dx>0&&el.scrollLeft>0)return true;
+        if(dx<0&&el.scrollLeft+el.clientWidth<el.scrollWidth-1)return true;
+      }
+    }
+    return false;
+  }
+  document.addEventListener("touchstart",e=>{multi=e.touches.length>1;const t=e.touches[0];sx=t.clientX;sy=t.clientY;st=Date.now();tg=e.target;},{passive:true});
+  document.addEventListener("touchend",e=>{
+    const el=tg;tg=null;
+    if(multi||!el)return;
+    const t=e.changedTouches[0],dx=t.clientX-sx,dy=t.clientY-sy;
+    if(Date.now()-st>900||Math.abs(dx)<70||Math.abs(dy)>Math.abs(dx)*0.6)return;
+    if(sx<24||sx>window.innerWidth-24)return;           // leave the phone's own edge swipes alone
+    if(document.querySelector(".ov.show"))return;       // not while a panel is open
+    if(el.closest&&el.closest("input,select,textarea,details"))return;
+    if(canScroll(el,dx))return;
+    const j=order.indexOf(view)+(dx<0?1:-1);
+    if(j<0||j>=order.length)return;
+    setView(order[j]);window.scrollTo(0,0);
+  },{passive:true});
+})();
+
 /* ---------- wiring ---------- */
 const HOLD={L:"Search a player or team",M:"Search to add players (name or team)",R:"",T:"Filter by player or team"};
 function setView(v){
@@ -1665,11 +1703,15 @@ function setView(v){
   draw();
 }
 function draw(){
+  $("qclr").style.display=$("q").value?"":"none";
   $("cnt").textContent="("+cur().length+")";
   $("prkwrap").style.display=posSel().length?"":"none";
   if(view==="L")renderLeaders();else if(view==="M")renderTeam();else if(view==="R")renderResearch();else renderTable();
 }
 document.addEventListener("click",e=>{
+  if(e.target.id==="qclr"){$("q").value="";draw();return;}
+  const cc=e.target.closest("[data-clr]");
+  if(cc){const f=$(cc.dataset.clr);if(f){f.value="";cmpSearch("");}return;}
   if(e.target.closest("#wbtn")){openWeights();return;}
   const wm=e.target.closest("[data-wm]");
   if(wm){const a=wm.dataset.wm.split(":"),r=document.querySelector('[data-wkey="'+a[0]+'"]');W[a[0]]=+a[1];if(r)r.value=a[1];saveW();updateWeightUI();wNote();updateWbtn();redraw();return;}
