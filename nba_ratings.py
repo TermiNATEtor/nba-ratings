@@ -1012,6 +1012,7 @@ details.cd summary{cursor:pointer;font-weight:700;font-size:14px}
 .main{max-width:1100px;margin:0 auto;padding:12px;position:relative;touch-action:pan-y pinch-zoom}
 .bwrap,.hwrap,.pos{touch-action:pan-x pan-y}
 .hide{display:none}
+.park{position:absolute;left:12px;right:12px;top:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
 .stack{display:grid;gap:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
@@ -1065,7 +1066,8 @@ th:nth-child(2){background:var(--head);z-index:3}
 td.nmc{overflow:hidden}
 .nmc .pc{min-width:0}
 .nmt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.ib{flex:none}
+.ib{flex:none;transition:width .15s,height .15s,padding .15s,font-size .15s}
+.bwrap.sc .nmc .ib{font-size:0;width:9px;height:9px;padding:0;border-radius:50%;margin-right:3px;vertical-align:0}
 th{overflow:hidden;text-overflow:ellipsis;font-size:14px}
 tbody tr{cursor:pointer}
 tbody tr:hover td{background:var(--head)}
@@ -1206,6 +1208,7 @@ pickBase();
 const agoText=d=>d===1?"yesterday":d+" days ago";
 const $=id=>document.getElementById(id);
 let view="L", key="overall", dir=-1;
+const PID={L:"leaders",M:"myteam",R:"research",T:"tablewrap"};
 /* ---------- category weights (importance 0-10 per stat -> percentages) ---------- */
 const WK="nba_w_v2";
 function defaultW(){const w={};STATS.forEach(s=>{w[s[0]]=5;});return w;}
@@ -1419,7 +1422,7 @@ function layoutTable(){
   ["cg1","cg2"].forEach(id=>{$(id).innerHTML=colGroup();});
   ["t1","t2"].forEach(id=>{$(id).style.minWidth=tableW()+"px";$(id).style.width="100%";});
 }
-function wireTableScroll(){$("bwrap").addEventListener("scroll",()=>{$("hwrap").scrollLeft=$("bwrap").scrollLeft;});}
+function wireTableScroll(){const b=$("bwrap");b.addEventListener("scroll",()=>{$("hwrap").scrollLeft=b.scrollLeft;b.classList.toggle("sc",b.scrollLeft>6);});}
 const getCols=()=>[["name","Player"],["team","Team"],["pos","Pos"],["mpg","MPG"],["gp","GP"],["overall","Overall"],...CATS.map(c=>[c[0],c[1]])];
 function val(r,k){return k in r.s?r.s[k]:(k==="mpg"?parseFloat(r.mpg):r[k]);}
 function cmp(a,b){
@@ -1493,7 +1496,7 @@ function shell(id,head,body){
   const st='style="min-width:'+tableW()+'px;width:100%"';
   return '<div class="sh"><div class="hwrap" id="'+id+'h"><table class="ft" '+st+'><colgroup>'+colGroup()+'</colgroup><thead>'+head+'</thead></table></div><div class="bwrap" id="'+id+'b"><table class="ft" '+st+'><colgroup>'+colGroup()+'</colgroup><tbody>'+body+'</tbody></table></div></div>';
 }
-function syncShell(id){const b=$(id+"b");if(b)b.addEventListener("scroll",()=>{$(id+"h").scrollLeft=b.scrollLeft;});}
+function syncShell(id){const b=$(id+"b");if(b)b.addEventListener("scroll",()=>{$(id+"h").scrollLeft=b.scrollLeft;b.classList.toggle("sc",b.scrollLeft>6);});}
 function renderTeam(){
   const rows=cur(), byId={};
   rows.forEach(r=>{byId[r.id]=r;});
@@ -1580,6 +1583,8 @@ function formCard(){
   return h+'<div class="cap">Form compares the last 5 games with the season, using the same 1-10 scoring on points, rebounds, assists, steals, blocks and turnovers. +9 means about 9 more rating points (out of 60) than usual. Shooting percentages are left out because 5 games is too few to trust.</div></section>';
 }
 function renderResearch(){
+  const q=$("q").value.trim();
+  if(q){$("research").innerHTML=searchHTML(q);return;}   // same results as on the Leaders tab
   const prev=$("cq")?$("cq").value:"";
   const rows=cmpIds.map(findRow).filter(Boolean);
   let c='<section class="card"><div class="ch"><span class="em">⚖️</span>Compare players<span class="ct">up to 3</span></div><div class="cin"><div class="sw"><input id="cq" type="search" placeholder="Search a player to add" autocomplete="off"><button class="clr" type="button" data-clr="cq" aria-label="Clear search" style="display:none">×</button></div><div id="cres"></div></div>';
@@ -1661,10 +1666,11 @@ const redraw=()=>{if(_raf)return;_raf=requestAnimationFrame(()=>{_raf=0;draw();}
 /* ---------- swipe between the tabs: the pages follow your finger (phones) ---------- */
 function renderView(v){if(v==="L")renderLeaders();else if(v==="M")renderTeam();else if(v==="R")renderResearch();else renderTable();}
 (function(){
-  const order=["L","M","R","T"], pid={L:"leaders",M:"myteam",R:"research",T:"tablewrap"};
+  const order=["L","M","R","T"], pid=PID;
   const stage=document.querySelector(".main");
-  let g=null, animating=false;
+  let g=null, animating=false, raf=0, pend=0;
   const W=()=>stage.clientWidth||window.innerWidth;
+  const tx=x=>"translate3d("+x+"px,0,0)";
   function canScroll(el,dx){   // can something under the finger still scroll sideways this way?
     const hw=el.closest&&el.closest(".hwrap");
     if(hw&&hw.nextElementSibling)el=hw.nextElementSibling;
@@ -1677,34 +1683,35 @@ function renderView(v){if(v==="L")renderLeaders();else if(v==="M")renderTeam();e
     }
     return false;
   }
-  function prepare(dir){   // draw the neighbouring page and park it just off-screen
+  function prepare(dir){   // show the neighbouring page (already drawn) and park it just off-screen
     const j=order.indexOf(view)+dir;
     if(j<0||j>=order.length)return null;
-    const nv=order[j];renderView(nv);
+    const nv=order[j];
+    if(warmed[nv]!==ver){renderView(nv);warmed[nv]=ver;}
     const el=$(pid[nv]), r=$(pid[view]).getBoundingClientRect(), sr=stage.getBoundingClientRect();
-    el.classList.remove("hide");
-    el.style.cssText="position:absolute;left:"+Math.round(r.left-sr.left)+"px;width:"+Math.round(r.width)+"px;top:"+g.top+"px;transition:none;will-change:transform";
+    el.classList.remove("hide","park");
+    el.style.cssText="position:absolute;left:"+Math.round(r.left-sr.left)+"px;width:"+Math.round(r.width)+"px;top:"+g.top+"px;transition:none;will-change:transform;transform:"+tx(dir*W());
     return {v:nv,el:el};
   }
   function apply(dx){
-    $(pid[view]).style.transform="translateX("+dx+"px)";
-    if(g.nb)g.nb.el.style.transform="translateX("+(dx+g.dir*W())+"px)";
+    $(pid[view]).style.transform=tx(dx);
+    if(g&&g.nb)g.nb.el.style.transform=tx(dx+g.dir*W());
   }
   function finish(st,commit){
-    g=null;animating=true;
-    const cEl=$(pid[view]), w=W(), ease="transform 240ms cubic-bezier(.2,.8,.2,1)";
+    cancelAnimationFrame(raf);raf=0;g=null;animating=true;
+    const cEl=$(pid[view]), w=W(), ease="transform 280ms cubic-bezier(.25,.8,.25,1)";
     cEl.style.transition=ease;if(st.nb)st.nb.el.style.transition=ease;
-    if(commit&&st.nb){cEl.style.transform="translateX("+(-st.dir*w)+"px)";st.nb.el.style.transform="translateX(0px)";}
-    else{cEl.style.transform="translateX(0px)";if(st.nb)st.nb.el.style.transform="translateX("+(st.dir*w)+"px)";}
+    if(commit&&st.nb){cEl.style.transform=tx(-st.dir*w);st.nb.el.style.transform=tx(0);}
+    else{cEl.style.transform=tx(0);if(st.nb)st.nb.el.style.transform=tx(st.dir*w);}
     setTimeout(()=>{
       stage.style.overflowX="";cEl.style.cssText="";
       if(st.nb){
         st.nb.el.style.cssText="";
-        if(commit){setView(st.nb.v);if(window.scrollY-stage.offsetTop>12)window.scrollTo(0,stage.offsetTop+12);}
-        else st.nb.el.classList.add("hide");
+        if(commit){setView(st.nb.v,true);scheduleWarm();if(window.scrollY-stage.offsetTop>12)window.scrollTo(0,stage.offsetTop+12);}
+        else st.nb.el.classList.add("park");
       }
       animating=false;
-    },260);
+    },300);
   }
   document.addEventListener("touchstart",e=>{
     if(animating||e.touches.length>1){g=null;return;}
@@ -1718,16 +1725,18 @@ function renderView(v){if(v==="L")renderLeaders();else if(v==="M")renderTeam();e
       if(Math.abs(dx)<10&&Math.abs(dy)<10)return;
       if(Math.abs(dy)>Math.abs(dx)*0.8||g.sx<24||g.sx>window.innerWidth-24||document.querySelector(".ov.show")||(g.el.closest&&g.el.closest("input,select,textarea,details"))||canScroll(g.el,dx)){g.mode="no";return;}
       g.mode="drag";g.top=Math.max(12,window.scrollY-stage.offsetTop);stage.style.overflowX="clip";
+      $(pid[view]).style.willChange="transform";
     }
     if(g.mode!=="drag")return;
     if(e.cancelable)e.preventDefault();
     const dir=dx<0?1:-1;
     if(dir!==g.dir){
-      if(g.nb){g.nb.el.classList.add("hide");g.nb.el.style.cssText="";}
+      if(g.nb){g.nb.el.classList.add("park");g.nb.el.style.cssText="";}
       g.dir=dir;g.nb=prepare(dir);
     }
     const now=Date.now();g.v=(t.clientX-g.lx)/Math.max(1,now-g.lt);g.lx=t.clientX;g.lt=now;
-    apply(g.nb?dx:dx*0.3);
+    pend=g.nb?dx:dx*0.3;
+    if(!raf)raf=requestAnimationFrame(()=>{raf=0;apply(pend);});
   },{passive:false});
   document.addEventListener("touchend",e=>{
     if(!g)return;
@@ -1741,23 +1750,36 @@ function renderView(v){if(v==="L")renderLeaders();else if(v==="M")renderTeam();e
 })();
 
 /* ---------- wiring ---------- */
-const HOLD={L:"Search a player or team",M:"Search to add players (name or team)",R:"",T:"Filter by player or team"};
-function setView(v){
+const HOLD={L:"Search a player or team",M:"Search to add players (name or team)",R:"Search a player or team",T:"Filter by player or team"};
+function setView(v,skip){
   view=v;
-  $("leaders").classList.toggle("hide",v!=="L");
-  $("myteam").classList.toggle("hide",v!=="M");
+  Object.keys(PID).forEach(k=>{const el=$(PID[k]);el.classList.toggle("hide",k!==v);el.classList.remove("park");});
   document.querySelector(".main").classList.toggle("wide",v==="T"||v==="M");
-  $("research").classList.toggle("hide",v!=="R");
-  $("tablewrap").classList.toggle("hide",v!=="T");
   $("tabL").classList.toggle("on",v==="L");$("tabM").classList.toggle("on",v==="M");$("tabR").classList.toggle("on",v==="R");$("tabT").classList.toggle("on",v==="T");
-  $("q").placeholder=HOLD[v];$("q").style.display=v==="R"?"none":"";
-  draw();
+  $("q").placeholder=HOLD[v];
+  if(skip)chrome();else draw();
 }
-function draw(){
+function chrome(){
   $("qclr").style.display=$("q").value?"":"none";
   $("cnt").textContent="("+cur().length+")";
   $("prkwrap").style.display=posSel().length?"":"none";
-  if(view==="L")renderLeaders();else if(view==="M")renderTeam();else if(view==="R")renderResearch();else renderTable();
+}
+/* the page next to the one you're on is drawn in advance, so swiping to it is smooth */
+let ver=0, warmed={}, _warm=0;
+function draw(){
+  ver++;chrome();
+  renderView(view);warmed[view]=ver;
+  scheduleWarm();
+}
+function scheduleWarm(){
+  clearTimeout(_warm);
+  _warm=setTimeout(()=>{
+    const idle=window.requestIdleCallback||(f=>setTimeout(f,60)), order=["L","M","R","T"], i=order.indexOf(view);
+    idle(()=>{[order[i-1],order[i+1]].filter(Boolean).forEach(v=>{
+      if(warmed[v]!==ver){renderView(v);warmed[v]=ver;}
+      const el=$(PID[v]);el.classList.remove("hide");el.classList.add("park");   // laid out in advance, just out of sight
+    });});
+  },350);
 }
 document.addEventListener("click",e=>{
   if(e.target.id==="qclr"){$("q").value="";draw();return;}
@@ -1785,7 +1807,7 @@ document.addEventListener("click",e=>{
   const ca=e.target.closest("[data-cmp]");
   if(ca){addCmp(ca.dataset.cmp);if($("cq"))$("cq").value="";renderResearch();return;}
   const co=e.target.closest("[data-cmpopen]");
-  if(co){addCmp(co.dataset.cmpopen);closeSheet();setView("R");window.scrollTo(0,0);return;}
+  if(co){addCmp(co.dataset.cmpopen);closeSheet();$("q").value="";setView("R");window.scrollTo(0,0);return;}
   const tb=e.target.closest("[data-tr]");
   if(tb){trend=tb.dataset.tr;try{localStorage.setItem("nba_trend_v1",trend);}catch(x){}pickBase();updateNote();draw();return;}
   const wb=e.target.closest("[data-wk]");
