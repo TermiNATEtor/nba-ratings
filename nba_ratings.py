@@ -971,6 +971,12 @@ input[type=search]::-webkit-search-cancel-button,input[type=search]::-webkit-sea
 .wb{border:0;background:rgba(255,255,255,.15);color:#fff;padding:6px 11px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
 .wb.on{background:var(--accent)}
 .pre{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+.ptabs{display:flex;gap:8px;margin:4px 0 12px}
+.ptab{flex:1;border:1px solid var(--line);background:none;color:var(--fg);border-radius:12px;padding:9px 6px;font-weight:700;font-size:13px;cursor:pointer;text-align:center;line-height:1.2}
+.ptab small{display:block;font-weight:500;color:var(--muted);font-size:11px;margin-top:2px}
+.ptab.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.ptab.on small{color:#fff;opacity:.9}
+.ck.off{opacity:.5}
 .gh2{font-weight:700;font-size:13px;color:var(--accent2);margin:12px 0 6px}
 .up{display:inline-flex;align-items:center;gap:2px}
 .del{border:0;background:var(--head);color:var(--fg);width:22px;height:22px;border-radius:50%;cursor:pointer;font-size:13px;line-height:1}
@@ -1089,7 +1095,7 @@ td.o{font-weight:700}
 @media (min-width:600px){.ov{align-items:center}.sheet{border-radius:20px}}
 .x{position:absolute;top:8px;right:10px;border:0;background:var(--head);color:var(--fg);width:32px;height:32px;border-radius:50%;font-size:20px;cursor:pointer;line-height:1}
 .shh{display:flex;align-items:center;gap:14px;margin-bottom:12px;padding-right:34px}
-.shn{font-size:20px;font-weight:800}
+.shn{font-size:20px;font-weight:800;padding-right:40px}
 .shs{color:var(--muted);font-size:13px}
 .shov{margin-left:auto;text-align:right;font-size:30px;font-weight:800;color:var(--accent2);line-height:1}
 .shov small{display:block;font-size:11px;color:var(--muted);font-weight:600}
@@ -1194,7 +1200,7 @@ const STATS=__STATS__, DATA=__DATA__, TEAMS=__TEAMS__;
 // a STATS / CATS entry: [key, label, lowerIsBetter, emoji, title, format, shownByDefault, group]
 const DEFAULT_SEL=STATS.filter(s=>s[6]).map(s=>s[0]);
 let SEL=loadSel(), CATS=[];
-function loadSel(){try{const a=JSON.parse(localStorage.getItem("nba_cats_v1")||"null");if(Array.isArray(a)){const ok=STATS.map(s=>s[0]).filter(k=>a.includes(k));if(ok.length>=3)return ok;}}catch(e){}return DEFAULT_SEL.slice();}
+function loadSel(){try{const a=JSON.parse(localStorage.getItem("nba_cats_v1")||"null");if(Array.isArray(a)){const ok=STATS.map(s=>s[0]).filter(k=>a.includes(k));if(ok.length>=3)return ok.slice(0,10);}}catch(e){}return DEFAULT_SEL.slice();}
 function applyCats(){CATS=STATS.filter(s=>SEL.includes(s[0]));}
 applyCats();
 let season="cur", ALL=DATA.cur.all, QUAL=DATA.cur.q;
@@ -1625,7 +1631,7 @@ function afterSetup(){
   renderWeights();draw();
 }
 function setSetup(sel,w){
-  SEL=STATS.map(s=>s[0]).filter(k=>sel.includes(k));
+  SEL=STATS.map(s=>s[0]).filter(k=>sel.includes(k)).slice(0,10);
   if(SEL.length<3)SEL=DEFAULT_SEL.slice();
   W=Object.assign(defaultW(),w||{});
   saveSel();saveW();afterSetup();
@@ -1642,21 +1648,28 @@ function savePreset(){
 function wNote(){$("wnote").textContent=wSum()===0?"All sliders are at 0, so equal weights are used.":wActive()?"Your custom setup is on.":"Default setup: the standard 10 stats, equal weights.";}
 function updateWeightUI(){const p=wPct();CATS.forEach((c,i)=>{const v=$("wv"+c[0]),e=$("wp"+c[0]);if(v)v.textContent=W[c[0]];if(e)e.textContent="("+Math.round(p[i]*100)+"%)";});}
 function updateWbtn(){$("wbtn").classList.toggle("on",wActive());$("wbtn").textContent=wActive()?"⚙️ Custom · on":"⚙️ Custom";}
+let ptab="cat";
 function renderWeights(){
   const box=$("wsheet"), keep=box.scrollTop;
-  let h='<button class="x" id="wcl" aria-label="Close">×</button><div class="shn">⚙️ Custom category weights</div><p class="note" style="margin:4px 0 10px">Build your own overall rating: choose which stats count, then set how much each one matters (0 = ignore it, 10 = most important). The overall stays out of 100.</p>';
-  h+='<div class="gh2">Presets</div><div class="pre">'+BUILTIN.map((x,i)=>'<button class="pill" data-pre="'+i+'">'+x[0]+'</button>').join("")+UP.map((u,i)=>'<span class="up"><button class="pill" data-up="'+i+'">'+esc(u.n)+'</button><button class="del" data-ud="'+i+'" aria-label="Delete '+esc(u.n)+'">×</button></span>').join("")+'</div>';
-  h+='<div class="svr"><input id="pname" maxlength="30" placeholder="Name this setup to save it"><button class="addbtn" id="psave">Save</button></div><p class="note" id="pmsg" style="margin:4px 0 0"></p>';
-  h+='<details class="cd" id="catd"'+(catOpen?' open':'')+'><summary>Categories: '+SEL.length+' selected</summary><p class="note" style="margin:6px 0">Pick at least 3. Each stat you pick gets its own leaderboard and counts toward the overall rating.</p>';
-  [...new Set(STATS.map(s=>s[7]))].forEach(g=>{
-    h+='<div class="cgp"><b>'+g+'</b>'+STATS.filter(s=>s[7]===g).map(s=>{const on=SEL.includes(s[0]),av=available(s[0]);return '<label class="ck"><input type="checkbox" data-ck="'+s[0]+'"'+(on?' checked':'')+((av||on)?'':' disabled')+'><span>'+s[3]+' '+s[1]+'</span><small>'+esc(s[4])+(av?'':' (not available yet)')+'</small></label>';}).join("")+'</div>';
-  });
-  h+='<button class="addbtn" id="catreset" style="margin-top:8px">Back to the default 10 stats</button></details>';
-  h+='<div class="gh2">Weights</div>';
-  const ticks='<div class="tk">'+[0,1,2,3,4,5,6,7,8,9,10].map(n=>'<span><i></i>'+n+'</span>').join("")+'</div>';
-  CATS.forEach(c=>{const k=c[0];h+='<div class="wr"><div class="wl">'+c[3]+' '+c[1]+'</div><button class="mm mn" data-wm="'+k+':0" aria-label="Set '+esc(c[4])+' to the minimum">min</button><div class="sl"><input type="range" min="0" max="10" step="1" value="'+W[k]+'" data-wkey="'+k+'" aria-label="'+esc(c[4])+' importance">'+ticks+'</div><button class="mm mx" data-wm="'+k+':10" aria-label="Set '+esc(c[4])+' to the maximum">max</button><div class="wvb"><span class="wv" id="wv'+k+'"></span><span class="wp" id="wp'+k+'"></span></div></div>';});
-  h+='<p class="note" id="wnote"></p><div class="abr"><button class="addbtn" id="wreset">Reset weights to equal</button><button class="addbtn" id="wdone">Done</button></div>';
-  box.innerHTML=h;updateWeightUI();wNote();box.scrollTop=keep;
+  let h='<button class="x" id="wcl" aria-label="Close">×</button><div class="shn">⚙️ Custom categories and weights</div><p class="note" style="margin:4px 0 10px">Build your own overall rating in two steps: pick up to 10 stats, then decide how much each one counts. The overall stays out of 100.</p>';
+  h+='<div class="gh2" style="margin-top:0">Presets <span class="note" style="font-weight:500">(set both your stats and your weights)</span></div><div class="pre">'+BUILTIN.map((x,i)=>'<button class="pill" data-pre="'+i+'">'+x[0]+'</button>').join("")+UP.map((u,i)=>'<span class="up"><button class="pill" data-up="'+i+'">'+esc(u.n)+'</button><button class="del" data-ud="'+i+'" aria-label="Delete '+esc(u.n)+'">×</button></span>').join("")+'</div>';
+  h+='<div class="svr"><input id="pname" maxlength="30" placeholder="Name this setup to save it"><button class="addbtn" id="psave">Save</button></div><p class="note" id="pmsg" style="margin:4px 0 10px"></p>';
+  h+='<div class="ptabs"><button class="ptab'+(ptab==="cat"?' on':'')+'" data-ptab="cat">Choose your categories<small>'+SEL.length+' of 10 chosen</small></button><button class="ptab'+(ptab==="w"?' on':'')+'" data-ptab="w">Determine your weighting<small>'+(wUneven()?'custom weights':'equal weights')+'</small></button></div>';
+  if(ptab==="cat"){
+    h+='<p class="note" id="cnote" style="margin:0 0 6px">Pick between 3 and 10 stats. Each one gets its own leaderboard and counts toward the overall rating.'+(SEL.length>=10?' You have 10 chosen. Untick one to pick another.':'')+'</p>';
+    [...new Set(STATS.map(s=>s[7]))].forEach(g=>{
+      h+='<div class="cgp"><b>'+g+'</b>'+STATS.filter(s=>s[7]===g).map(s=>{const on=SEL.includes(s[0]),av=available(s[0]),full=!on&&SEL.length>=10;return '<label class="ck'+(full?' off':'')+'"><input type="checkbox" data-ck="'+s[0]+'"'+(on?' checked':'')+((av&&!full)||on?'':' disabled')+'><span>'+s[3]+' '+s[1]+'</span><small>'+esc(s[4])+(av?'':' (not available yet)')+'</small></label>';}).join("")+'</div>';
+    });
+    h+='<div class="abr" style="margin-top:12px"><button class="addbtn" id="catreset">Back to the default 10</button><button class="addbtn" id="wdone">Done</button></div>';
+  }else{
+    h+='<div class="gh2">Weights</div><p class="note" style="margin:0 0 4px">0 = ignore it, 10 = most important.</p>';
+    const ticks='<div class="tk">'+[0,1,2,3,4,5,6,7,8,9,10].map(n=>'<span><i></i>'+n+'</span>').join("")+'</div>';
+    CATS.forEach(c=>{const k=c[0];h+='<div class="wr"><div class="wl">'+c[3]+' '+c[1]+'</div><button class="mm mn" data-wm="'+k+':0" aria-label="Set '+esc(c[4])+' to the minimum">min</button><div class="sl"><input type="range" min="0" max="10" step="1" value="'+W[k]+'" data-wkey="'+k+'" aria-label="'+esc(c[4])+' importance">'+ticks+'</div><button class="mm mx" data-wm="'+k+':10" aria-label="Set '+esc(c[4])+' to the maximum">max</button><div class="wvb"><span class="wv" id="wv'+k+'"></span><span class="wp" id="wp'+k+'"></span></div></div>';});
+    h+='<p class="note" id="wnote"></p><div class="abr"><button class="addbtn" id="wreset">Reset weights to equal</button><button class="addbtn" id="wdone">Done</button></div>';
+  }
+  box.innerHTML=h;
+  if(ptab==="w"){updateWeightUI();wNote();}
+  box.scrollTop=keep;
 }
 const openWeights=()=>{renderWeights();$("wov").classList.add("show");};
 const closeWeights=()=>$("wov").classList.remove("show");
@@ -1786,6 +1799,8 @@ document.addEventListener("click",e=>{
   const cc=e.target.closest("[data-clr]");
   if(cc){const f=$(cc.dataset.clr);if(f){f.value="";cmpSearch("");}return;}
   if(e.target.closest("#wbtn")){openWeights();return;}
+  const pt=e.target.closest("[data-ptab]");
+  if(pt){ptab=pt.dataset.ptab;renderWeights();$("wsheet").scrollTop=0;return;}
   const wm=e.target.closest("[data-wm]");
   if(wm){const a=wm.dataset.wm.split(":"),r=document.querySelector('[data-wkey="'+a[0]+'"]');W[a[0]]=+a[1];if(r)r.value=a[1];saveW();updateWeightUI();wNote();updateWbtn();redraw();return;}
   const pr=e.target.closest("[data-pre]");
@@ -1835,8 +1850,9 @@ document.addEventListener("input",e=>{
 document.addEventListener("change",e=>{
   const ck=e.target.dataset&&e.target.dataset.ck;
   if(ck===undefined)return;
+  if(e.target.checked&&SEL.length>=10){e.target.checked=false;return;}
   const next=e.target.checked?SEL.concat(ck):SEL.filter(k=>k!==ck);
-  if(next.length<3){e.target.checked=true;$("wnote").textContent="Keep at least 3 stats selected.";return;}
+  if(next.length<3){e.target.checked=true;const n=$("cnote");if(n)n.textContent="Keep at least 3 stats selected.";return;}
   SEL=STATS.map(s=>s[0]).filter(k=>next.includes(k));saveSel();afterSetup();
 });
 document.addEventListener("toggle",e=>{if(e.target.id==="catd")catOpen=e.target.open;},true);
