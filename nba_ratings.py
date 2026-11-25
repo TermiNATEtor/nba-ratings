@@ -1094,11 +1094,15 @@ td.o{font-weight:700}
 .sheet{position:relative;background:var(--card);width:100%;max-width:520px;max-height:90vh;overflow:auto;border-radius:20px 20px 0 0;padding:18px 16px 22px}
 @media (min-width:600px){.ov{align-items:center}.sheet{border-radius:20px}}
 .x{position:absolute;top:8px;right:10px;border:0;background:var(--head);color:var(--fg);width:32px;height:32px;border-radius:50%;font-size:20px;cursor:pointer;line-height:1}
-.shh{display:flex;align-items:center;gap:14px;margin-bottom:12px;padding-right:34px}
-.shn{font-size:20px;font-weight:800;padding-right:40px}
+.shh{display:flex;align-items:center;gap:12px;margin-bottom:12px;padding-right:34px}
+.shh>div:nth-child(2){flex:1;min-width:0}
+.shh .shn{font-size:18px}
+@media (max-width:420px){.shh .av{--s:60px !important}}
+.shn{font-size:20px;font-weight:800;overflow-wrap:anywhere;line-height:1.15}
+#wsheet .shn{padding-right:40px}
 .shs{color:var(--muted);font-size:13px}
-.shov{margin-left:auto;text-align:right;font-size:30px;font-weight:800;color:var(--accent2);line-height:1}
-.shov small{display:block;font-size:11px;color:var(--muted);font-weight:600}
+.shov{margin-left:auto;flex:none;text-align:right;font-size:30px;font-weight:800;color:var(--accent2);line-height:1}
+.shov small{display:block;white-space:normal;font-size:11px;color:var(--muted);font-weight:600}
 .addbtn{display:block;width:100%;margin:0 0 12px;padding:10px;border-radius:12px;border:1px solid var(--accent);background:none;color:var(--accent2);font-weight:700;font-size:14px;cursor:pointer}
 .addbtn:hover{background:var(--head)}
 .abr{display:flex;gap:8px;margin:0 0 12px}
@@ -1608,7 +1612,7 @@ function openPlayer(id){
   const od=overallDelta(r);
   const dl=(od===null||od===0)?"":' · <span class="mv '+(od>0?"up":"dn")+'" style="margin:0">'+(od>0?"▲ +":"▼ −")+Math.abs(od)+' vs '+agoText(BASE.days)+'</span>';
   const ij=isCur()?INJ[r.id]:null;
-  h+='<div class="shh">'+av(r,72)+'<div><div class="shn">'+esc(r.name)+'</div><div class="shs">'+esc(tName(r))+(r.pos?" · "+esc(r.pos):"")+' · '+r.mpg+' MPG · '+r.gp+' GP</div></div><div class="shov">'+r.overall+'<small>of 100'+dl+'</small></div></div>';
+  h+='<div class="shh">'+av(r,72)+'<div><div class="shn">'+esc(r.name)+'</div><div class="shs">'+esc(tName(r))+(r.pos?" · "+esc(r.pos):"")+' · '+r.mpg+' MPG · '+r.gp+' GP</div>'+(dl?'<div class="shs">'+dl.slice(3)+'</div>':'')+'</div><div class="shov">'+r.overall+'<small>of 100</small></div></div>';
   if(ij&&ij.s)h+='<div class="inj">'+ib(r.id)+esc(ij.s+(ij.d?": "+ij.d:""))+'</div>';
   h+='<div class="abr"><button class="addbtn" data-st="'+r.id+'">'+(inTeam(r.id)?"★ On my team":"☆ Add to my team")+'</button><button class="addbtn" data-cmpopen="'+r.id+'">⚖️ Compare players</button></div>';
   CATS.forEach(c=>{const sc=r.s[c[0]];
