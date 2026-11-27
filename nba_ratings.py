@@ -68,8 +68,24 @@ EXTRA_STATS = [
     ("stk", "STK", "STK", False, "1d", "🕸️", "Steals + blocks per game", "Defense"),
     ("pf", "PF", "PF", True, "1d", "🚩", "Fewest fouls per game", "Defense"),
     ("min", "MPG", "MIN", False, "1d", "⏱️", "Minutes per game", "Other"),
-    ("dd", "DD", "DD", False, "int", "✌️", "Double-doubles (season total)", "Other"),
-    ("td", "TD", "TD", False, "int", "🤯", "Triple-doubles (season total)", "Other"),
+    # season totals
+    ("tpts", "Tot PTS", "T_PTS", False, "int", "🔥", "Total points", "Totals"),
+    ("treb", "Tot REB", "T_REB", False, "int", "💪", "Total rebounds", "Totals"),
+    ("tast", "Tot AST", "T_AST", False, "int", "🤝", "Total assists", "Totals"),
+    ("tstl", "Tot STL", "T_STL", False, "int", "🖐️", "Total steals", "Totals"),
+    ("tblk", "Tot BLK", "T_BLK", False, "int", "🛡️", "Total blocks", "Totals"),
+    ("ttov", "Tot TO", "T_TOV", True, "int", "🔒", "Fewest total turnovers", "Totals"),
+    ("t3pm", "Tot 3PM", "T_3PM", False, "int", "🏹", "Total 3-pointers made", "Totals"),
+    ("t3pa", "Tot 3PA", "T_3PA", False, "int", "🚀", "Total 3-pointers attempted", "Totals"),
+    ("tfgm", "Tot FGM", "T_FGM", False, "int", "🏀", "Total field goals made", "Totals"),
+    ("tfga", "Tot FGA", "T_FGA", False, "int", "📤", "Total field goals attempted", "Totals"),
+    ("tftm", "Tot FTM", "T_FTM", False, "int", "✔️", "Total free throws made", "Totals"),
+    ("tfta", "Tot FTA", "T_FTA", False, "int", "🙌", "Total free throws attempted", "Totals"),
+    ("tpf", "Tot PF", "T_PF", True, "int", "🚩", "Fewest total fouls", "Totals"),
+    ("tmin", "Tot MIN", "T_MIN", False, "int", "⏱️", "Total minutes played", "Totals"),
+    ("gp", "GP", "GP", False, "int", "📅", "Games played", "Totals"),
+    ("dd", "DD", "DD", False, "int", "✌️", "Double-doubles (season total)", "Totals"),
+    ("td", "TD", "TD", False, "int", "🤯", "Triple-doubles (season total)", "Totals"),
 ]
 STAT_GROUP = {"ppg": "Scoring", "rpg": "Rebounding", "apg": "Playmaking", "spg": "Defense",
               "bpg": "Defense", "fgp": "Shooting", "ftp": "Shooting", "tpp": "Shooting",
@@ -206,6 +222,13 @@ def compute_ratings(players, teams, qualified_only=False):
     for col in ("OREB", "DREB", "PF", "DD", "TD"):
         if col not in df:
             df[col] = np.nan
+    for tcol, pcol in (("T_PTS", "PTS"), ("T_REB", "REB"), ("T_AST", "AST"), ("T_STL", "STL"),
+                       ("T_BLK", "BLK"), ("T_TOV", "TOV"), ("T_PF", "PF"), ("T_MIN", "MIN"),
+                       ("T_FGM", "FGM"), ("T_FGA", "FGA"), ("T_FTM", "FTM"), ("T_FTA", "FTA"),
+                       ("T_3PM", "FG3M"), ("T_3PA", "FG3A")):
+        if tcol not in df:
+            df[tcol] = np.nan
+        df[tcol] = df[tcol].fillna(df[pcol] * df["GP"])
     df["PRA"] = df["PTS"] + df["REB"] + df["AST"]
     df["STK"] = df["STL"] + df["BLK"]
     df["ATR"] = df["AST"] / df["TOV"].clip(lower=0.1)
@@ -286,6 +309,12 @@ ESPN_OPTIONAL = {
     "PF": ["avgFouls", "avgPersonalFouls"],
     "DD": ["doubleDouble", "doubleDoubles"],
     "TD": ["tripleDouble", "tripleDoubles"],
+    # season totals (ESPN's feed has these as plain names)
+    "T_PTS": ["points"], "T_REB": ["rebounds"], "T_AST": ["assists"], "T_STL": ["steals"],
+    "T_BLK": ["blocks"], "T_TOV": ["turnovers"], "T_PF": ["fouls"], "T_MIN": ["minutes"],
+    "T_FGM": ["fieldGoalsMade"], "T_FGA": ["fieldGoalsAttempted"],
+    "T_FTM": ["freeThrowsMade"], "T_FTA": ["freeThrowsAttempted"],
+    "T_3PM": ["threePointFieldGoalsMade"], "T_3PA": ["threePointFieldGoalsAttempted"],
 }
 ESPN_URL = ("https://site.web.api.espn.com/apis/common/v3/sports/"
             "basketball/nba/statistics/byathlete")
@@ -977,6 +1006,10 @@ input[type=search]::-webkit-search-cancel-button,input[type=search]::-webkit-sea
 .ptab.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .ptab.on small{color:#fff;opacity:.9}
 .ck.off{opacity:.5}
+.stabs{display:flex;gap:6px;margin:0 0 10px}
+.stab{flex:1;border:1px solid var(--line);background:none;color:var(--fg);border-radius:10px;padding:6px 4px;font-weight:600;font-size:12.5px;cursor:pointer;line-height:1.2}
+.stab small{display:block;font-weight:500;color:var(--muted);font-size:11px}
+.stab.on{border-color:var(--accent);color:var(--accent2);background:rgba(249,115,22,.12)}
 .gh2{font-weight:700;font-size:13px;color:var(--accent2);margin:12px 0 6px}
 .up{display:inline-flex;align-items:center;gap:2px}
 .del{border:0;background:var(--head);color:var(--fg);width:22px;height:22px;border-radius:50%;cursor:pointer;font-size:13px;line-height:1}
@@ -987,8 +1020,9 @@ details.cd{border:1px solid var(--line);border-radius:12px;padding:8px 12px;marg
 details.cd summary{cursor:pointer;font-weight:700;font-size:14px}
 .cgp{margin:10px 0 4px}
 .cgp>b{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
-.ck{display:grid;grid-template-columns:auto 72px 1fr;gap:8px;align-items:center;padding:4px 0;font-size:14px}
+.ck{display:grid;grid-template-columns:auto 104px 1fr;gap:8px;align-items:center;padding:4px 0;font-size:14px}
 .ck small{color:var(--muted);font-size:11.5px}
+.ck>span{white-space:nowrap}
 .ck input{width:18px;height:18px;accent-color:var(--accent)}
 .wr{display:grid;grid-template-columns:auto 1fr auto 46px;grid-template-areas:"lab lab lab lab" "mn sl mx val";gap:2px 6px;align-items:start;padding:8px 0;font-size:14px;border-top:1px solid var(--line)}
 .wr:first-of-type{border-top:0}
@@ -1652,7 +1686,8 @@ function savePreset(){
 function wNote(){$("wnote").textContent=wSum()===0?"All sliders are at 0, so equal weights are used.":wActive()?"Your custom setup is on.":"Default setup: the standard 10 stats, equal weights.";}
 function updateWeightUI(){const p=wPct();CATS.forEach((c,i)=>{const v=$("wv"+c[0]),e=$("wp"+c[0]);if(v)v.textContent=W[c[0]];if(e)e.textContent="("+Math.round(p[i]*100)+"%)";});}
 function updateWbtn(){$("wbtn").classList.toggle("on",wActive());$("wbtn").textContent=wActive()?"⚙️ Custom · on":"⚙️ Custom";}
-let ptab="cat";
+let ptab="cat", ctab="avg";
+const isTot=s=>s[7]==="Totals";
 function renderWeights(){
   const box=$("wsheet"), keep=box.scrollTop;
   let h='<button class="x" id="wcl" aria-label="Close">×</button><div class="shn">⚙️ Custom categories and weights</div><p class="note" style="margin:4px 0 10px">Build your own overall rating in two steps: pick up to 10 stats, then decide how much each one counts. The overall stays out of 100.</p>';
@@ -1660,9 +1695,12 @@ function renderWeights(){
   h+='<div class="svr"><input id="pname" maxlength="30" placeholder="Name this setup to save it"><button class="addbtn" id="psave">Save</button></div><p class="note" id="pmsg" style="margin:4px 0 10px"></p>';
   h+='<div class="ptabs"><button class="ptab'+(ptab==="cat"?' on':'')+'" data-ptab="cat">Choose your categories<small>'+SEL.length+' of 10 chosen</small></button><button class="ptab'+(ptab==="w"?' on':'')+'" data-ptab="w">Determine your weighting<small>'+(wUneven()?'custom weights':'equal weights')+'</small></button></div>';
   if(ptab==="cat"){
-    h+='<p class="note" id="cnote" style="margin:0 0 6px">Pick between 3 and 10 stats. Each one gets its own leaderboard and counts toward the overall rating.'+(SEL.length>=10?' You have 10 chosen. Untick one to pick another.':'')+'</p>';
-    [...new Set(STATS.map(s=>s[7]))].forEach(g=>{
-      h+='<div class="cgp"><b>'+g+'</b>'+STATS.filter(s=>s[7]===g).map(s=>{const on=SEL.includes(s[0]),av=available(s[0]),full=!on&&SEL.length>=10;return '<label class="ck'+(full?' off':'')+'"><input type="checkbox" data-ck="'+s[0]+'"'+(on?' checked':'')+((av&&!full)||on?'':' disabled')+'><span>'+s[3]+' '+s[1]+'</span><small>'+esc(s[4])+(av?'':' (not available yet)')+'</small></label>';}).join("")+'</div>';
+    h+='<p class="note" id="cnote" style="margin:0 0 6px">Pick between 3 and 10 stats in total, from either list. Each one gets its own leaderboard and counts toward the overall rating.'+(SEL.length>=10?' You have 10 chosen. Untick one to pick another.':'')+'</p>';
+    const nTot=STATS.filter(s=>isTot(s)&&SEL.includes(s[0])).length, nAvg=SEL.length-nTot;
+    h+='<div class="stabs"><button class="stab'+(ctab==="avg"?' on':'')+'" data-stab="avg">Averages and percentages<small>'+nAvg+' chosen</small></button><button class="stab'+(ctab==="tot"?' on':'')+'" data-stab="tot">Season totals<small>'+nTot+' chosen</small></button></div>';
+    const list=STATS.filter(s=>ctab==="tot"?isTot(s):!isTot(s));
+    [...new Set(list.map(s=>s[7]))].forEach(g=>{
+      h+='<div class="cgp">'+(g==="Totals"?'':'<b>'+g+'</b>')+list.filter(s=>s[7]===g).map(s=>{const on=SEL.includes(s[0]),av=available(s[0]),full=!on&&SEL.length>=10;return '<label class="ck'+(full?' off':'')+'"><input type="checkbox" data-ck="'+s[0]+'"'+(on?' checked':'')+((av&&!full)||on?'':' disabled')+'><span>'+s[3]+' '+s[1]+'</span><small>'+esc(s[4])+(av?'':' (not available yet)')+'</small></label>';}).join("")+'</div>';
     });
     h+='<div class="abr" style="margin-top:12px"><button class="addbtn" id="catreset">Back to the default 10</button><button class="addbtn" id="wdone">Done</button></div>';
   }else{
@@ -1803,6 +1841,8 @@ document.addEventListener("click",e=>{
   const cc=e.target.closest("[data-clr]");
   if(cc){const f=$(cc.dataset.clr);if(f){f.value="";cmpSearch("");}return;}
   if(e.target.closest("#wbtn")){openWeights();return;}
+  const stb=e.target.closest("[data-stab]");
+  if(stb){ctab=stb.dataset.stab;renderWeights();return;}
   const pt=e.target.closest("[data-ptab]");
   if(pt){ptab=pt.dataset.ptab;renderWeights();$("wsheet").scrollTop=0;return;}
   const wm=e.target.closest("[data-wm]");
